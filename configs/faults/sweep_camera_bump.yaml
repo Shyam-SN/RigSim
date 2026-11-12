@@ -1,0 +1,12 @@
+schema_version: "1.0.0"
+scenario_name: "sweep_camera_bump"
+description: "Parametric sweep over physical camera bump extrinsic displacement"
+faults:
+  - fault_type: "camera_bump"
+    stream_id: "cam_stereo_right"
+    t_start_s: 4.0
+    t_end_s: 10.0
+    severity: 1.0
+    params:
+      delta_rotation_deg: 2.0
+      delta_translation_mm: 8.0

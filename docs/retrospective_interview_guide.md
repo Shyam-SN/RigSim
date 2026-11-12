@@ -151,4 +151,57 @@ This document serves as a living engineering journal and technical interview pre
 > MCAP solves this by being container-native: it includes embedded protobuf and JSON schemas, allows embedding attachments (like raw calibration YAMLs and ground-truth fault manifests) directly inside the file, supports separate `log_time` vs `publish_time` per message for transport latency analysis, and opens natively in Foxglove without needing ROS."*
 
 ---
+
+## Milestone M2: Synthetic Fault Injection & Ground-Truth Labelling
+
+### 1. Technical Context & Strategic Design Decisions
+
+#### A. The Role of Synthetic Fault Injection in Data Quality Engineering
+- **The Core Problem:** Production robotics datasets rarely fail in catastrophic, obvious ways (e.g. system crash). Instead, they fail subtly: thermal throttling causing FPS to drop from 60 Hz to 42 Hz, slight mechanical bumps shifting camera extrinsics by 1.2°, or frozen frames where the camera driver repeats the last frame buffer while the host clock keeps advancing.
+- **Why Synthetic Labelling is Critical:** In real-world data collection, you cannot train or validate a QA engine without ground truth. If you only test on clean data, your QA engine might have zero false positives, but unknown false negatives (low recall). By building 24 deterministic, parameterized fault injectors with byte-level ground truth (`labels.json`), we can mathematically compute the Precision, Recall, F1, and temporal IoU of every single check in the QA engine.
+
+#### B. The 24-Fault Taxonomy
+- **Layer 1: Timing & Transport (Faults 1–12):** Random drops, burst drops, jitter, thermal throttling, clock drift (ppm), inter-camera offsets, IMU–camera offsets, clock steps (NTP jumps), non-monotonic/duplicate timestamps, host buffer latency spikes, IMU dropouts, and early disconnects.
+- **Layer 2: Optics & Image Content (Faults 13–20):** Directional motion blur, over/underexposure, lens occlusion (finger/tape), frozen frames, compression/stripe corruption, low-light shot noise, extrinsic bumps (camera shifts), and focal length/focus shifts.
+- **Layer 3: Inertial Dynamics (Faults 21–24):** Gyro/accel saturation, bias jumps (DC offset steps), high noise, and axis flips (frame mounting errors).
+
+---
+
+### 2. Mistakes Encountered, Diagnosis & Fixes
+
+#### Mistake 9: Timestamp Sanity Injector State Tracking
+- **What Happened:** In `test_fault_9_timestamp_sanity`, the duplicate timestamp injector returned `140` instead of duplicating the previous timestamp `120`.
+- **How It Was Found:** Pytest failure: `assert 140 == 120`.
+- **Root Cause:** When `modify_timestamp(120)` was called on the first frame of the active window, `self.last_ts` was `None`. The injector set `self.injected = True` immediately, so the subsequent frame (`140`) treated the injection as already completed and bypassed the mutation logic.
+- **How It Was Fixed:** Refactored `TimestampSanityInjector` to record the first frame as the baseline `self.last_ts` without marking injection as complete, then on the second frame mutated the timestamp (`return self.last_ts` for duplicates, or `return self.last_ts - 20_000_000` for non-monotonicity), properly exercising the check.
+
+#### Mistake 10: Test Time Units Mismatch
+- **What Happened:** In `test_fault_3_fps_jitter`, `t_out == t_in` failed assertion `assert t_out != t_in`.
+- **How It Was Found:** Pytest failure: `assert 150000000 != 150000000`.
+- **Root Cause:** The test initialized `t_start_ns=100`, `t_end_ns=200`, but passed test timestamp `t_in = 150_000_000` ($150\text{ ms}$). Because $150\times 10^6 > 200$, `is_active()` returned `False`.
+- **How It Was Fixed:** Standardized test parameters to nanosecond units (`t_start_ns=100_000_000`, `t_end_ns=200_000_000`).
+
+#### Mistake 11: OpenCV Return Type Narrowing in Mypy
+- **What Happened:** Mypy flagged `cv2.warpAffine` and `cv2.filter2D` with `Incompatible types in assignment` and `Returning Any from function`.
+- **How It Was Found:** Running `mypy src tests`.
+- **Root Cause:** The OpenCV C++ binding stubs (`cv2.typing`) return untyped `Mat` objects that Mypy resolves as `Any`.
+- **How It Was Fixed:** Explicitly coerced the outputs with `np.asarray(..., dtype=np.float32)` and annotated return types.
+
+---
+
+### 3. Interview Cheat Sheet & Talking Points
+
+#### Question: *"How do you test and establish the detection limits of an automated data QA engine?"*
+> **Candidate Answer:**
+> *"You cannot rely on ad-hoc real data alone because real data lacks controlled ground truth at varying severity levels.  
+> In RigSim, I architected a suite of 24 composable fault injectors spanning transport, image, and inertial domains. Each injector takes a severity parameter $\alpha \in [0, 1]$ and produces an exact `FaultLabel` with nanosecond start/stop windows and physical metadata.  
+> By running parametric sweeps over severity—such as sweeping drop rates from 0.1% to 10%, clock drift from 1 to 50 ppm, or camera bumps from 0.1° to 5°—we plot empirical detection-rate curves. This allows us to state quantitative SLAs to clients: for example, 'Our pipeline guarantees 99.5% recall on camera bumps $\ge 0.5^\circ$ with $< 0.1$ false flags per capture hour on clean data.'"*
+
+#### Question: *"What is a 'frozen frame' failure mode and why is it particularly dangerous for end-to-end autonomous policies?"*
+> **Candidate Answer:**
+> *"A frozen frame occurs when a camera sensor or CSI/USB bridge freezes, but the driver or IPC middleware keeps streaming the last frame buffer with newly incremented timestamps.  
+> Simple timestamp-based checks see nominal 30 FPS and mark the stream healthy. However, if fed into a downstream imitation learning policy or VIO estimator, the policy sees a static visual scene while the robot is physically moving, causing catastrophic drift or sudden erratic control commands.  
+> To catch this, the QA engine must compute visual frame difference hashes (e.g. perceptual hash or exact pixel diff against consecutive frames) while cross-referencing with IMU angular rate: identical consecutive frames during nonzero IMU motion is an immediate critical failure."*
+
+---
 *(Will be updated continuously after each milestone)*

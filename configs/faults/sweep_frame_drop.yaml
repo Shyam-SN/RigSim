@@ -1,0 +1,11 @@
+schema_version: "1.0.0"
+scenario_name: "sweep_frame_drop"
+description: "Parametric sweep over random frame drop severity"
+faults:
+  - fault_type: "random_frame_drop"
+    stream_id: "cam_corner_fl"
+    t_start_s: 2.0
+    t_end_s: 8.0
+    severity: 0.10
+    params:
+      drop_probability: 0.10

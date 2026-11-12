@@ -12,6 +12,7 @@ from rigsim.config.faults import FaultScenarioConfig
 from rigsim.config.rig import RigConfig
 from rigsim.config.session import Session, SessionSource, Stream
 from rigsim.config.types import SensorKind
+from rigsim.faults.engine import FaultEngine
 from rigsim.io.mcap_writer import RigSimMCAPWriter
 from rigsim.sim.camera import CameraSimulator
 from rigsim.sim.imu import IMUSimulator
@@ -38,6 +39,13 @@ class SimulationEngine:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         # Realistic UNIX epoch base (~Nov 2023) so uint64 MCAP timestamps accommodate negative clock offsets
         self.epoch_base_ns = 1_700_000_000_000_000_000
+
+        # Initialize Fault Engine
+        self.fault_engine = FaultEngine(
+            config=fault_config,
+            epoch_base_ns=self.epoch_base_ns,
+            seed=seed,
+        )
 
         # Locate MJCF asset
         asset_path = Path("assets/mjcf") / f"{rig_config.rig_name}.xml"
@@ -174,23 +182,33 @@ class SimulationEngine:
                 # 4. IMU sample trigger
                 if self.imu_sim and t_sim_s >= (next_imu_s - 1e-6):
                     next_imu_s += imu_period_s
-                    clock = self.clocks[self.rig_config.imu.clock_id]  # type: ignore[union-attr]
-                    dev_t = clock.sim_to_device_time_ns(t_sim_ns)
-                    host_t = self.transport.compute_host_time_ns(dev_t)
+                    imu_stream_id = self.rig_config.imu.stream_id  # type: ignore[union-attr]
 
-                    accel = self.data.sensordata[self.imu_accel_id : self.imu_accel_id + 3].copy()
-                    gyro = self.data.sensordata[self.imu_gyro_id : self.imu_gyro_id + 3].copy()
-                    quat = self.data.sensordata[self.imu_quat_id : self.imu_quat_id + 4].copy()
+                    # Check for IMU dropout / disconnect
+                    if not self.fault_engine.should_drop_imu(imu_stream_id, t_sim_ns):
+                        clock = self.clocks[self.rig_config.imu.clock_id]  # type: ignore[union-attr]
+                        dev_t = clock.sim_to_device_time_ns(t_sim_ns)
+                        dev_t = self.fault_engine.modify_device_time(imu_stream_id, dev_t)
+                        host_t = self.transport.compute_host_time_ns(dev_t)
+                        host_t = self.fault_engine.modify_host_time(imu_stream_id, host_t, dev_t)
 
-                    imu_sample = self.imu_sim.update_and_sample(
-                        true_accel=accel,
-                        true_gyro=gyro,
-                        true_quat_wxyz=quat,
-                        device_time_ns=dev_t,
-                        host_time_ns=host_t,
-                        t_sim_s=t_sim_s,
-                    )
-                    writer.write_imu(self.rig_config.imu.stream_id, imu_sample)  # type: ignore[union-attr]
+                        accel = self.data.sensordata[
+                            self.imu_accel_id : self.imu_accel_id + 3
+                        ].copy()
+                        gyro = self.data.sensordata[self.imu_gyro_id : self.imu_gyro_id + 3].copy()
+                        quat = self.data.sensordata[self.imu_quat_id : self.imu_quat_id + 4].copy()
+
+                        imu_sample = self.imu_sim.update_and_sample(
+                            true_accel=accel,
+                            true_gyro=gyro,
+                            true_quat_wxyz=quat,
+                            device_time_ns=dev_t,
+                            host_time_ns=host_t,
+                            t_sim_s=t_sim_s,
+                        )
+                        # Apply IMU content faults
+                        imu_sample = self.fault_engine.modify_imu_sample(imu_stream_id, imu_sample)
+                        writer.write_imu(imu_stream_id, imu_sample)
 
                 # 5. Camera triggers
                 for cam_id, cam_sim in self.cameras.items():
@@ -198,9 +216,15 @@ class SimulationEngine:
                     if t_sim_s >= (sched["next_trigger_s"] - 1e-6):
                         sched["next_trigger_s"] += sched["period_s"]
 
+                        # Check for frame drop or disconnect
+                        if self.fault_engine.should_drop_frame(cam_id, t_sim_ns):
+                            continue
+
                         clock = self.clocks[cam_sim.spec.clock_id]
                         dev_t = clock.sim_to_device_time_ns(t_sim_ns)
+                        dev_t = self.fault_engine.modify_device_time(cam_id, dev_t)
                         host_t = self.transport.compute_host_time_ns(dev_t)
+                        host_t = self.fault_engine.modify_host_time(cam_id, host_t, dev_t)
 
                         # Render scene from camera
                         self.renderer.update_scene(self.data, camera=cam_id)
@@ -212,6 +236,9 @@ class SimulationEngine:
                         # Apply lens distortion & sensor noise
                         final_img = cam_sim.process_and_distort(cropped)
 
+                        # Apply image content faults
+                        final_img = self.fault_engine.modify_image(cam_id, final_img, dev_t)
+
                         # Write to MCAP
                         writer.write_image(
                             stream_id=cam_id,
@@ -222,8 +249,9 @@ class SimulationEngine:
                             encoding="jpeg",
                         )
 
-                        # Write TF pose
+                        # Write TF pose (with possible bump modification)
                         ext = cam_sim.compute_extrinsics(self.data)
+                        ext = self.fault_engine.modify_extrinsics(cam_id, ext, dev_t)
                         writer.write_transform(
                             parent_frame="world",
                             child_frame=cam_sim.spec.frame_id,
@@ -249,6 +277,15 @@ class SimulationEngine:
             name="rig.yaml",
             media_type="application/x-yaml",
             data_bytes=rig_yaml_str.encode("utf-8"),
+        )
+
+        # Attach ground-truth fault labels
+        labels = self.fault_engine.get_ground_truth_labels()
+        labels_json_str = json.dumps([lbl.model_dump() for lbl in labels], indent=2)
+        writer.add_attachment(
+            name="labels.json",
+            media_type="application/json",
+            data_bytes=labels_json_str.encode("utf-8"),
         )
 
         writer.close()
@@ -303,6 +340,6 @@ class SimulationEngine:
 
         labels_path = self.output_dir / "labels.json"
         with open(labels_path, "w") as f:
-            json.dump([], f, indent=2)
+            f.write(labels_json_str)
 
         return session

@@ -1,0 +1,12 @@
+schema_version: "1.0.0"
+scenario_name: "sweep_blur"
+description: "Parametric sweep over directional motion blur severity"
+faults:
+  - fault_type: "motion_blur"
+    stream_id: "cam_wrist"
+    t_start_s: 3.0
+    t_end_s: 8.0
+    severity: 0.8
+    params:
+      kernel_size: 25
+      angle_deg: 30.0

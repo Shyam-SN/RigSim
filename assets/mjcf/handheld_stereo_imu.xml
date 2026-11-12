@@ -55,3 +55,4 @@
     <framequat objtype="site" objname="imu0_site" name="imu_quat"/>
   </sensor>
 </mujoco>
+

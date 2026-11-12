@@ -1,0 +1,11 @@
+schema_version: "1.0.0"
+scenario_name: "sweep_imu_cam_offset"
+description: "Parametric sweep over IMU-camera temporal delay offsets"
+faults:
+  - fault_type: "imu_cam_offset"
+    stream_id: "imu_rig"
+    t_start_s: 0.0
+    t_end_s: 60.0
+    severity: 1.0
+    params:
+      offset_ms: 25.0
