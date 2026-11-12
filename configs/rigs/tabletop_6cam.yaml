@@ -173,3 +173,4 @@ scene_features:
     pose:
       translation: [0.2, 0.1, 0.75]
       rotation_xyzw: [0.0, 0.0, 0.0, 1.0]
+

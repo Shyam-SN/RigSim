@@ -8,3 +8,4 @@ archive_storage_per_gb_month: 0.00099   # AWS Glacier Deep Archive
 egress_per_gb: 0.09                     # Standard internet egress
 cloud_gpu_encode_per_hour: 0.50         # Worker VM spot rate for offline transcoding
 default_uplink_mbps: 100.0              # Facility upload bandwidth (Mbps)
+

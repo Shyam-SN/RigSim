@@ -43,3 +43,4 @@ critical_checks:
   - "C2_CAMERA_BUMP"
   - "C3_STEREO_CONSISTENCY"
   - "M1_IMU_GRAVITY"
+

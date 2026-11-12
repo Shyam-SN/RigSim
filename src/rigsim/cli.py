@@ -52,10 +52,33 @@ def simulate(
     """Run physics-based multi-sensor simulation session and write MCAP."""
     console.print(f"[bold green]Simulating session[/bold green] using rig: [cyan]{rig}[/cyan]")
     console.print(f"Duration: {duration}s | Seed: {seed} | Output: {output_dir}")
-    # Implementation wired in Milestone M1
-    console.print(
-        "[yellow]M0 CLI skeleton: Milestone M1 will generate the full MCAP session.[/yellow]"
+
+    import yaml
+
+    from rigsim.config.faults import FaultScenarioConfig
+    from rigsim.config.rig import RigConfig
+    from rigsim.sim.simulator import SimulationEngine
+
+    with open(rig) as f:
+        rig_cfg = RigConfig.model_validate(yaml.safe_load(f))
+
+    fault_cfg = None
+    if faults and faults.exists():
+        with open(faults) as f:
+            fault_cfg = FaultScenarioConfig.model_validate(yaml.safe_load(f))
+
+    engine = SimulationEngine(
+        rig_config=rig_cfg,
+        fault_config=fault_cfg,
+        duration_s=duration,
+        seed=seed,
+        output_dir=output_dir,
     )
+    session = engine.run()
+    console.print(
+        f"[bold green]✓ Simulation complete![/bold green] Session ID: [cyan]{session.session_id}[/cyan]"
+    )
+    console.print(f"MCAP written to: [cyan]{session.mcap_path}[/cyan]")
 
 
 @app.command()

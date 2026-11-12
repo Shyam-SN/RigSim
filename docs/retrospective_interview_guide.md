@@ -78,4 +78,77 @@ This document serves as a living engineering journal and technical interview pre
 > We divide rigs into hardware-synced groups (stereo pairs sharing a trigger line where sub-millisecond precision is non-negotiable) and software-synced groups (overview surveillance cameras where 5-10 ms jitter does not degrade scene context). This optimizes cabling complexity and sensor cost."*
 
 ---
+
+## Milestone M1: Physics Simulator, Multi-Camera Rendering & MCAP Architecture
+
+### 1. Technical Context & Strategic Design Decisions
+
+#### A. Apple Silicon Offscreen Rendering (CGL vs EGL vs OSMesa)
+- **The Context:** Headless rendering on Linux servers traditionally uses `EGL` (with NVIDIA GPUs) or `OSMesa` (CPU software rasterization). On macOS (arm64 Apple Silicon), however, Apple deprecates external OpenGL drivers in favor of Metal, but provides native `CGL` (Core OpenGL) hardware-accelerated wrappers.
+- **Strategic Rule:** Attempting to force `MUJOCO_GL=egl` on macOS will crash with missing symbols. Offscreen rendering on macOS must use MuJoCo's default CGL backend without setting Linux environment variables.
+
+#### B. Coordinate Conventions: MuJoCo (OpenGL) vs OpenCV Optical Frames
+- **The Mathematics:**
+  - MuJoCo / OpenGL Camera Frame: Looking along $-Z$, $+Y$ is Up, $+X$ is Right.
+  - OpenCV / ROS Optical Frame: Looking along $+Z$, $+Y$ is Down, $+X$ is Right.
+- **Transformation Matrix:**
+  $$\mathbf{R}_{\text{cv\_from\_mj}} = \begin{bmatrix} 1 & 0 & 0 \\ 0 & -1 & 0 \\ 0 & 0 & -1 \end{bmatrix}$$
+  To transform a world 3D point $\mathbf{p}_w$ into the OpenCV camera coordinate frame:
+  $$\mathbf{p}_{\text{cam\_cv}} = \mathbf{R}_{\text{cv\_from\_mj}} \cdot \mathbf{R}_{\text{world\_to\_mj}} \cdot (\mathbf{p}_w - \mathbf{p}_{\text{cam\_pos}})$$
+- **Verification:** Unit tests confirm that projecting a 3D world landmark (e.g. tabletop red cube) with ground-truth intrinsics $K$ and extrinsics matches `cv2.projectPoints` to within $10^{-5}$ pixels and falls exactly on the red pixels of the rendered image.
+
+#### C. Discrete-Time IMU Stochastic Noise Integration
+- In continuous time, white noise has units $rad/(s\cdot\sqrt{Hz})$.
+- In discrete time at sampling frequency $f_s = 1/\Delta t$:
+  $$\sigma_{\text{discrete}} = \frac{\sigma_{\text{white}}}{\sqrt{\Delta t}}$$
+- For the random walk bias update:
+  $$\sigma_{\text{bias\_discrete}} = \sigma_{\text{walk}} \cdot \sqrt{\Delta t}$$
+  $$b_k = b_{k-1} + \mathcal{N}(0, \sigma_{\text{bias\_discrete}}^2)$$
+  $$\tilde{\mathbf{y}}_k = \mathbf{y}_k + \mathbf{b}_k + \mathcal{N}(0, \sigma_{\text{discrete}}^2)$$
+
+---
+
+### 2. Mistakes Encountered, Diagnosis & Fixes
+
+#### Mistake 5: CGL Pixel Format Failure in Restricted Sandboxes
+- **What Happened:** Initial attempts to run `mujoco.Renderer` in sandboxed execution threw `CGLError: invalid pixel format` at `cgl.CGLChoosePixelFormat`.
+- **How It Was Found:** Executing offscreen rendering inside standard sandbox.
+- **Root Cause:** MuJoCo requests `CGLPFAAccelerated` (hardware acceleration). macOS sandbox security profiles block direct Mach/IOKit access to the Apple Silicon GPU graphics kernel extensions (`/dev/io8log`, AGX Accelerator).
+- **How It Was Fixed:** MuJoCo offscreen rendering on macOS requires unconfined graphics subsystem access (`BypassSandbox: true`), enabling full Apple Silicon hardware rendering throughput (>50 FPS multi-camera).
+
+#### Mistake 6: Camera Origin Occluded by Parent Robot Geometry
+- **What Happened:** Wrist camera images had an average pixel intensity of `9.2` (virtually black).
+- **How It Was Found:** Iterating through all camera renders and logging `mean_val`. All fixed cameras reported `79 - 217`, while `cam_wrist` reported `9.2`.
+- **Root Cause:** In the MJCF model, `geom name="wrist_geom" type="sphere" size="0.02"` was centered at `pos="0 0 0"`, exactly coinciding with `camera name="cam_wrist" pos="0 0 0"`. The camera was placed inside the opaque collision geometry of its own gripper link.
+- **How It Was Fixed:** Shifted the mount geometry above the camera origin (`pos="0 0 0.04"`) and oriented the camera optical axis downward (`xyaxes="1 0 0 0 1 0"`). Average brightness immediately jumped to `229.8`.
+
+#### Mistake 7: MCAP uint64 Overflow on Negative Clock Offsets
+- **What Happened:** Running simulation with `tabletop_6cam.yaml` failed in `mcap/data_stream.py` at `struct.pack("<Q", self.publish_time)` with `error: argument out of range`.
+- **How It Was Found:** Python traceback pointing to unsigned 64-bit integer packing in MCAP message writing.
+- **Root Cause:** Rig specification included `clock_wrist` with `offset_ns: -3500000` (-3.5 ms offset). When simulation started at $t_{\text{sim}} = 0$, $t_{\text{device}} = -3,500,000$ ns. MCAP `publish_time` is strictly an unsigned 64-bit integer (`uint64`). Negative integers cannot be packed with `<Q`.
+- **How It Was Fixed:** Real robotics sensors never run at timestamp 0; they are referenced to UNIX epoch or monotonic uptime. We anchored the simulation to a realistic epoch base ($t_{\text{epoch}} = 1.7 \times 10^{18}$ ns). The negative 3.5 ms offset simply subtracts from the epoch base, remaining positive uint64 while preserving negative relative drift/offset.
+
+#### Mistake 8: Stream Pydantic Enum Validation on IMU Ingest
+- **What Happened:** Simulator crashed with `ValidationError: Input should be 'rgb', 'stereo_left', 'stereo_right' or 'imu' [type=enum, input_value='imu_rig']`.
+- **How It Was Found:** Pydantic validation traceback on `Session` instantiation.
+- **Root Cause:** Code passed `stream_id` (`"imu_rig"`) instead of `kind` (`SensorKind.IMU`).
+- **How It Was Fixed:** Explicitly assigned `kind=SensorKind.IMU`.
+
+---
+
+### 3. Interview Cheat Sheet & Talking Points
+
+#### Question: *"How do you test that simulated camera intrinsics and extrinsics accurately mirror real-world OpenCV/ROS standards?"*
+> **Candidate Answer:**
+> *"Simulation graphics backends (like MuJoCo and OpenGL) use a right-handed coordinate convention where the camera looks down $-Z$, with $+Y$ up. In contrast, computer vision conventions (OpenCV and ROS REP-103) define the optical frame with $+Z$ pointing forward into the scene, $+X$ right, and $+Y$ down.  
+> To guarantee zero sim-to-real coordinate mismatch, I apply the transform $\mathbf{R}_{\text{cv\_from\_mj}} = \text{diag}(1, -1, -1)$ to the camera pose.  
+> I then write unit tests that place a known 3D fiducial landmark in the world, transform it to OpenCV optical camera coordinates, and project it both analytically and via `cv2.projectPoints`. The test asserts that the projected coordinates match to within $10^{-5}$ pixels and sample the exact colored pixels in the rendered frame buffer."*
+
+#### Question: *"Why is MCAP preferred over traditional ROS 1 / ROS 2 bag formats or loose MP4/CSV files for multi-modal robotics pipelines?"*
+> **Candidate Answer:**
+> *"Loose MP4s and CSVs decouple video from IMU and clock metadata, making cross-sensor synchronization verification fragile.  
+> Traditional ROS 1/2 bags require heavy ROS environment installs, have brittle IDL message dependencies, and lack self-describing schema registries.  
+> MCAP solves this by being container-native: it includes embedded protobuf and JSON schemas, allows embedding attachments (like raw calibration YAMLs and ground-truth fault manifests) directly inside the file, supports separate `log_time` vs `publish_time` per message for transport latency analysis, and opens natively in Foxglove without needing ROS."*
+
+---
 *(Will be updated continuously after each milestone)*

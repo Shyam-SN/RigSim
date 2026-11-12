@@ -1,0 +1,87 @@
+{
+  "configById": {
+    "ImageView!1": {
+      "cameraTopic": "/cam_stereo_left/image_compressed",
+      "transformMarkers": true,
+      "synchronize": true
+    },
+    "ImageView!2": {
+      "cameraTopic": "/cam_stereo_right/image_compressed",
+      "transformMarkers": true,
+      "synchronize": true
+    },
+    "ImageView!3": {
+      "cameraTopic": "/cam_wrist/image_compressed",
+      "transformMarkers": true,
+      "synchronize": true
+    },
+    "ImageView!4": {
+      "cameraTopic": "/cam_corner_fl/image_compressed",
+      "transformMarkers": true,
+      "synchronize": true
+    },
+    "Plot!1": {
+      "title": "IMU Angular Velocity (rad/s)",
+      "paths": [
+        { "value": "/imu_rig/data.angular_velocity.x", "enabled": true, "color": "#e05353" },
+        { "value": "/imu_rig/data.angular_velocity.y", "enabled": true, "color": "#4caf50" },
+        { "value": "/imu_rig/data.angular_velocity.z", "enabled": true, "color": "#2196f3" }
+      ],
+      "showLegend": true
+    },
+    "Plot!2": {
+      "title": "IMU Linear Acceleration (m/s²)",
+      "paths": [
+        { "value": "/imu_rig/data.linear_acceleration.x", "enabled": true, "color": "#e05353" },
+        { "value": "/imu_rig/data.linear_acceleration.y", "enabled": true, "color": "#4caf50" },
+        { "value": "/imu_rig/data.linear_acceleration.z", "enabled": true, "color": "#2196f3" }
+      ],
+      "showLegend": true
+    },
+    "3D!1": {
+      "layers": {
+        "grid": { "visible": true },
+        "transforms": { "visible": true }
+      },
+      "cameraState": {
+        "distance": 3.2,
+        "perspective": true,
+        "phi": 55,
+        "thetaOffset": 45,
+        "target": [0, 0, 0.7]
+      },
+      "followTf": "world"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "first": {
+      "first": {
+        "first": "ImageView!1",
+        "second": "ImageView!2",
+        "direction": "row"
+      },
+      "second": {
+        "first": "ImageView!3",
+        "second": "ImageView!4",
+        "direction": "row"
+      },
+      "direction": "column"
+    },
+    "second": {
+      "first": "3D!1",
+      "second": {
+        "first": "Plot!1",
+        "second": "Plot!2",
+        "direction": "column"
+      },
+      "direction": "column"
+    },
+    "direction": "row",
+    "splitPercentage": 50
+  }
+}

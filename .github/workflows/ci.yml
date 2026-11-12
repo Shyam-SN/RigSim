@@ -63,3 +63,4 @@ jobs:
           MUJOCO_GL: ${{ matrix.mujoco_gl }}
         run: |
           .venv/bin/python -m pytest tests/ -v --cov=src/rigsim --cov-report=term-missing
+

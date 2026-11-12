@@ -52,3 +52,4 @@ faults:
     severity: 1.0
     params:
       axis: "gyro_z"
+
