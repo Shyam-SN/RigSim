@@ -1,0 +1,175 @@
+schema_version: "1.0.0"
+rig_name: "tabletop_6cam"
+description: "Tabletop manipulation rig: 4 fixed cameras, 1 stereo pair, 1 moving wrist camera, and 1 IMU"
+
+sync_groups:
+  - group_id: "hw_stereo"
+    sync_mode: "hardware_trigger"
+    stream_ids: ["cam_stereo_left", "cam_stereo_right"]
+  - group_id: "fixed_array"
+    sync_mode: "ptp_software"
+    stream_ids: ["cam_corner_fl", "cam_corner_fr", "cam_corner_rl", "cam_corner_rr"]
+  - group_id: "wrist"
+    sync_mode: "independent"
+    stream_ids: ["cam_wrist"]
+  - group_id: "imu_primary"
+    sync_mode: "independent"
+    stream_ids: ["imu_rig"]
+
+clocks:
+  - clock_id: "clock_hw_trigger"
+    offset_ns: 0
+    drift_ppm: 0.0
+    jitter_std_ns: 50000
+  - clock_id: "clock_fixed_bus"
+    offset_ns: 1200000
+    drift_ppm: 12.5
+    jitter_std_ns: 250000
+  - clock_id: "clock_wrist"
+    offset_ns: -3500000
+    drift_ppm: -24.0
+    jitter_std_ns: 400000
+  - clock_id: "clock_imu"
+    offset_ns: 800000
+    drift_ppm: 5.0
+    jitter_std_ns: 10000
+
+imu:
+  stream_id: "imu_rig"
+  nominal_rate_hz: 200.0
+  clock_id: "clock_imu"
+  frame_id: "imu_rig_link"
+  # EuRoC ADIS16448 parameters
+  gyro_noise_density: 1.6968e-04
+  gyro_random_walk: 1.9393e-05
+  accel_noise_density: 2.0e-03
+  accel_random_walk: 3.0e-03
+  saturation:
+    gyro_max_rad_s: 34.906
+    accel_max_m_s2: 156.96
+  extrinsics_to_rig:
+    translation: [0.0, 0.0, 0.0]
+    rotation_xyzw: [0.0, 0.0, 0.0, 1.0]
+
+cameras:
+  - stream_id: "cam_stereo_left"
+    kind: "stereo_left"
+    nominal_rate_hz: 30.0
+    resolution: [1280, 720]
+    fov_deg: 75.0
+    clock_id: "clock_hw_trigger"
+    frame_id: "cam_stereo_left_optical"
+    exposure_time_ms: 10.0
+    distortion:
+      model: "radtan"
+      coeffs: [-0.08, 0.05, 0.001, -0.001]
+    extrinsics_to_rig:
+      translation: [-0.06, 0.5, 0.8]
+      rotation_xyzw: [0.7071068, 0.0, 0.0, 0.7071068]
+
+  - stream_id: "cam_stereo_right"
+    kind: "stereo_right"
+    nominal_rate_hz: 30.0
+    resolution: [1280, 720]
+    fov_deg: 75.0
+    clock_id: "clock_hw_trigger"
+    frame_id: "cam_stereo_right_optical"
+    exposure_time_ms: 10.0
+    distortion:
+      model: "radtan"
+      coeffs: [-0.08, 0.05, 0.001, -0.001]
+    extrinsics_to_rig:
+      translation: [0.06, 0.5, 0.8]
+      rotation_xyzw: [0.7071068, 0.0, 0.0, 0.7071068]
+
+  - stream_id: "cam_corner_fl"
+    kind: "rgb"
+    nominal_rate_hz: 30.0
+    resolution: [1280, 720]
+    fov_deg: 80.0
+    clock_id: "clock_fixed_bus"
+    frame_id: "cam_corner_fl_optical"
+    exposure_time_ms: 8.0
+    distortion:
+      model: "radtan"
+      coeffs: [-0.05, 0.02, 0.0, 0.0]
+    extrinsics_to_rig:
+      translation: [-0.8, -0.6, 1.2]
+      rotation_xyzw: [0.5, -0.5, 0.5, 0.5]
+
+  - stream_id: "cam_corner_fr"
+    kind: "rgb"
+    nominal_rate_hz: 30.0
+    resolution: [1280, 720]
+    fov_deg: 80.0
+    clock_id: "clock_fixed_bus"
+    frame_id: "cam_corner_fr_optical"
+    exposure_time_ms: 8.0
+    distortion:
+      model: "radtan"
+      coeffs: [-0.05, 0.02, 0.0, 0.0]
+    extrinsics_to_rig:
+      translation: [0.8, -0.6, 1.2]
+      rotation_xyzw: [0.5, 0.5, -0.5, 0.5]
+
+  - stream_id: "cam_corner_rl"
+    kind: "rgb"
+    nominal_rate_hz: 30.0
+    resolution: [1280, 720]
+    fov_deg: 80.0
+    clock_id: "clock_fixed_bus"
+    frame_id: "cam_corner_rl_optical"
+    exposure_time_ms: 8.0
+    distortion:
+      model: "radtan"
+      coeffs: [-0.05, 0.02, 0.0, 0.0]
+    extrinsics_to_rig:
+      translation: [-0.8, 0.6, 1.2]
+      rotation_xyzw: [0.653, -0.27, 0.27, 0.653]
+
+  - stream_id: "cam_corner_rr"
+    kind: "rgb"
+    nominal_rate_hz: 30.0
+    resolution: [1280, 720]
+    fov_deg: 80.0
+    clock_id: "clock_fixed_bus"
+    frame_id: "cam_corner_rr_optical"
+    exposure_time_ms: 8.0
+    distortion:
+      model: "radtan"
+      coeffs: [-0.05, 0.02, 0.0, 0.0]
+    extrinsics_to_rig:
+      translation: [0.8, 0.6, 1.2]
+      rotation_xyzw: [0.27, 0.653, -0.653, 0.27]
+
+  - stream_id: "cam_wrist"
+    kind: "rgb"
+    nominal_rate_hz: 60.0
+    resolution: [640, 480]
+    fov_deg: 65.0
+    clock_id: "clock_wrist"
+    frame_id: "cam_wrist_optical"
+    exposure_time_ms: 4.0
+    mounted_on_body: "wrist_link"
+    distortion:
+      model: "radtan"
+      coeffs: [-0.04, 0.01, 0.0, 0.0]
+    extrinsics_to_rig:
+      translation: [0.0, 0.0, 0.05]
+      rotation_xyzw: [0.0, 0.7071068, 0.0, 0.7071068]
+
+scene_features:
+  sync_strobe:
+    enabled: true
+    position: [0.0, 0.0, 0.75]
+    pattern_type: "prbs"
+    baud_rate_hz: 10.0
+  charuco_board:
+    squares_x: 7
+    squares_y: 5
+    square_length_m: 0.04
+    marker_length_m: 0.03
+    dictionary: "DICT_5X5_100"
+    pose:
+      translation: [0.2, 0.1, 0.75]
+      rotation_xyzw: [0.0, 0.0, 0.0, 1.0]

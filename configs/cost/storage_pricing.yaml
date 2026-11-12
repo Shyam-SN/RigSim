@@ -1,0 +1,10 @@
+# User-editable storage & cloud pricing (USD).
+# NOTE: Update these based on your cloud provider contract (AWS / GCP / Cloudflare / Wasabi).
+# DO NOT present these numbers as universal facts in client reports.
+
+hot_storage_per_gb_month: 0.023         # AWS S3 Standard / GCP Standard
+cold_storage_per_gb_month: 0.004        # AWS Glacier Instant Retrieval
+archive_storage_per_gb_month: 0.00099   # AWS Glacier Deep Archive
+egress_per_gb: 0.09                     # Standard internet egress
+cloud_gpu_encode_per_hour: 0.50         # Worker VM spot rate for offline transcoding
+default_uplink_mbps: 100.0              # Facility upload bandwidth (Mbps)

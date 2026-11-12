@@ -1,0 +1,54 @@
+schema_version: "1.0.0"
+scenario_name: "realistic_mixed"
+description: "Realistic multi-fault scenario testing drops, blur, bumps, exposure, and drift"
+
+faults:
+  - fault_type: "random_frame_drop"
+    stream_id: "cam_corner_fl"
+    t_start_s: 5.0
+    t_end_s: 15.0
+    severity: 0.05
+    params:
+      drop_probability: 0.05
+
+  - fault_type: "burst_frame_drop"
+    stream_id: "cam_wrist"
+    t_start_s: 20.0
+    t_end_s: 21.0
+    severity: 0.8
+    params:
+      burst_size_frames: 6
+
+  - fault_type: "motion_blur"
+    stream_id: "cam_wrist"
+    t_start_s: 25.0
+    t_end_s: 30.0
+    severity: 0.7
+    params:
+      exposure_multiplier: 4.0
+
+  - fault_type: "lens_occlusion"
+    stream_id: "cam_corner_fr"
+    t_start_s: 35.0
+    t_end_s: 42.0
+    severity: 0.9
+    params:
+      mode: "finger_blob"
+      coverage: 0.75
+
+  - fault_type: "camera_bump"
+    stream_id: "cam_stereo_right"
+    t_start_s: 50.0
+    t_end_s: 60.0
+    severity: 0.6
+    params:
+      delta_rotation_deg: 1.2
+      delta_translation_mm: 5.0
+
+  - fault_type: "imu_saturation"
+    stream_id: "imu_rig"
+    t_start_s: 12.0
+    t_end_s: 13.0
+    severity: 1.0
+    params:
+      axis: "gyro_z"

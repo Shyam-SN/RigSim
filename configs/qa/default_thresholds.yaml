@@ -1,0 +1,45 @@
+schema_version: "1.0.0"
+
+timing:
+  max_drop_ratio: 0.01                  # FAIL if > 1.0% dropped frames
+  max_drop_burst_frames: 2              # FAIL if burst drop >= 3 consecutive frames
+  max_jitter_ms: 2.0                    # FAIL if timestamp jitter std dev > 2.0 ms
+  min_effective_fps_ratio: 0.95         # WARN if rolling FPS < 95% of nominal
+  max_inter_cam_offset_ms: 2.0          # FAIL if synchronized pair offset > 2.0 ms
+  max_inter_cam_drift_ppm: 10.0         # FAIL if clock drift > 10.0 ppm
+  max_imu_cam_offset_ms: 5.0            # WARN/FAIL if IMU-cam offset > 5.0 ms
+  max_transport_latency_spike_ms: 25.0  # WARN if host receive latency spikes > 25 ms
+
+image:
+  min_normalized_blur_ratio: 0.50       # FAIL if Laplacian variance < 50% rolling median
+  min_mean_brightness: 20.0             # FAIL if underexposed (mean brightness < 20 / 255)
+  max_mean_brightness: 235.0            # FAIL if overexposed (mean brightness > 235 / 255)
+  max_clipping_ratio: 0.05              # WARN if > 5% pixels clipped at 0 or 255
+  max_frozen_frame_count: 2             # FAIL if >= 3 identical frames with moving timestamps
+  max_corrupted_frame_count: 0          # FAIL immediately on any corrupted/decode fail frame
+  occlusion_min_uniform_ratio: 0.60     # FAIL if uniform flat region > 60% of frame
+
+calibration:
+  max_charuco_reprojection_rms_px: 0.50 # FAIL if ChArUco RMS > 0.5 px
+  max_stereo_reprojection_rms_px: 0.70  # FAIL if stereo calibration RMS > 0.7 px
+  max_bump_rotation_deg: 0.50           # FAIL if camera orientation shifts > 0.5 deg
+  max_bump_translation_mm: 3.0          # FAIL if camera position shifts > 3.0 mm
+  max_epipolar_error_px: 1.0            # FAIL if stereo epipolar error > 1.0 px
+
+imu:
+  max_gravity_error_m_s2: 0.20          # FAIL if static gravity norm deviates > 0.2 m/s^2 from 9.81
+  max_gyro_static_bias_rad_s: 0.01      # FAIL if static gyro bias > 0.01 rad/s
+  max_accel_static_bias_m_s2: 0.10      # FAIL if static accel bias > 0.1 m/s^2
+  max_saturation_samples: 0             # FAIL if any sample clips at sensor limit
+
+critical_checks:
+  - "T1_FRAME_DROPS"
+  - "T4_TIMESTAMP_SANITY"
+  - "T6_INTER_CAM_SYNC"
+  - "T7_IMU_CAM_OFFSET"
+  - "I3_OCCLUSION"
+  - "I4_FROZEN_FRAMES"
+  - "I5_CORRUPTION"
+  - "C2_CAMERA_BUMP"
+  - "C3_STEREO_CONSISTENCY"
+  - "M1_IMU_GRAVITY"

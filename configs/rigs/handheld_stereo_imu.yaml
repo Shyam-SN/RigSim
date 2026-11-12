@@ -1,0 +1,84 @@
+schema_version: "1.0.0"
+rig_name: "handheld_stereo_imu"
+description: "Handheld visual-inertial rig: hardware-synchronized stereo pair and 200 Hz IMU"
+
+sync_groups:
+  - group_id: "hw_stereo"
+    sync_mode: "hardware_trigger"
+    stream_ids: ["cam0", "cam1"]
+  - group_id: "imu_primary"
+    sync_mode: "independent"
+    stream_ids: ["imu0"]
+
+clocks:
+  - clock_id: "clock_stereo"
+    offset_ns: 0
+    drift_ppm: 0.0
+    jitter_std_ns: 20000
+  - clock_id: "clock_imu"
+    offset_ns: 0
+    drift_ppm: 0.0
+    jitter_std_ns: 10000
+
+imu:
+  stream_id: "imu0"
+  nominal_rate_hz: 200.0
+  clock_id: "clock_imu"
+  frame_id: "imu0_link"
+  gyro_noise_density: 1.6968e-04
+  gyro_random_walk: 1.9393e-05
+  accel_noise_density: 2.0e-03
+  accel_random_walk: 3.0e-03
+  saturation:
+    gyro_max_rad_s: 34.906
+    accel_max_m_s2: 156.96
+  extrinsics_to_rig:
+    translation: [0.0, 0.0, 0.0]
+    rotation_xyzw: [0.0, 0.0, 0.0, 1.0]
+
+cameras:
+  - stream_id: "cam0"
+    kind: "stereo_left"
+    nominal_rate_hz: 20.0
+    resolution: [752, 480]
+    fov_deg: 75.0
+    clock_id: "clock_stereo"
+    frame_id: "cam0_optical"
+    exposure_time_ms: 10.0
+    distortion:
+      model: "radtan"
+      coeffs: [-0.28340811, 0.07395907, 0.00019359, 1.76187114e-05]
+    extrinsics_to_rig:
+      translation: [-0.055, 0.0, 0.0]
+      rotation_xyzw: [0.0, 0.0, 0.0, 1.0]
+
+  - stream_id: "cam1"
+    kind: "stereo_right"
+    nominal_rate_hz: 20.0
+    resolution: [752, 480]
+    fov_deg: 75.0
+    clock_id: "clock_stereo"
+    frame_id: "cam1_optical"
+    exposure_time_ms: 10.0
+    distortion:
+      model: "radtan"
+      coeffs: [-0.28368365, 0.07451284, -0.00010473, -3.555907e-05]
+    extrinsics_to_rig:
+      translation: [0.055, 0.0, 0.0]  # 0.11m baseline
+      rotation_xyzw: [0.0, 0.0, 0.0, 1.0]
+
+scene_features:
+  sync_strobe:
+    enabled: true
+    position: [0.0, 2.0, 1.0]
+    pattern_type: "prbs"
+    baud_rate_hz: 10.0
+  charuco_board:
+    squares_x: 7
+    squares_y: 5
+    square_length_m: 0.06
+    marker_length_m: 0.045
+    dictionary: "DICT_5X5_100"
+    pose:
+      translation: [0.0, 2.0, 1.0]
+      rotation_xyzw: [0.0, 0.0, 0.0, 1.0]
