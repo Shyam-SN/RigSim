@@ -249,7 +249,11 @@ def check_m4_imu_gravity_direction(
     accel_readings: list[list[float]] | np.ndarray,
     gyro_readings: list[list[float]] | np.ndarray,
     timestamps_ns: list[int],
-    expected_upright_vector: list[float] | tuple[float, float, float] | np.ndarray = (0.0, 0.0, 1.0),  # +Z reaction when resting
+    expected_upright_vector: list[float] | tuple[float, float, float] | np.ndarray = (
+        0.0,
+        0.0,
+        1.0,
+    ),  # +Z reaction when resting
     max_angle_deg: float = 25.0,
 ) -> QAResult:
     """M4: Gravity vector alignment check (detects inverted mounts or axis flip faults)."""

@@ -371,13 +371,109 @@ def ingest(
 
 @sync_app.command("qr")
 def sync_qr(
-    phone_session: Path = typer.Argument(..., help="Path to phone capture session"),
-    mac_log: Path = typer.Option(
-        ..., "--mac-log", "-m", help="Path to Mac QR clock timestamp CSV log"
+    phone_session: Path = typer.Argument(
+        ..., help="Path to phone capture session folder or video file"
+    ),
+    camera: str = typer.Option(
+        "phone_cam", "--camera", "-c", help="Camera stream ID in session MCAP"
+    ),
+    max_frames: int = typer.Option(
+        300, "--max-frames", "-m", help="Max frames to process for QR decoding"
     ),
 ) -> None:
-    """Perform cross-device QR clock synchronization and fit clock model with robust regression."""
-    console.print(f"[bold green]Syncing phone session:[/bold green] [cyan]{phone_session}[/cyan]")
+    """Perform cross-device QR clock synchronization and fit clock model with robust Huber regression."""
+    import json
+
+    import cv2
+    import numpy as np
+    from foxglove_schemas_protobuf import CompressedImage_pb2
+    from mcap.reader import make_reader
+
+    from rigsim.sync.qr_clock import QrClockSyncEstimator
+
+    console.print(
+        f"[bold green]Running optical QR clock synchronization on:[/bold green] [cyan]{phone_session}[/cyan]"
+    )
+
+    estimator = QrClockSyncEstimator()
+
+    if phone_session.is_file() and phone_session.suffix.lower() in (".mp4", ".mov", ".m4v", ".avi"):
+        # Direct video file
+        res = estimator.process_video_file(phone_session, max_frames=max_frames)
+        sess_dir = phone_session.parent
+    else:
+        sess_dir = phone_session.parent if phone_session.is_file() else phone_session
+        manifest_file = sess_dir / "session.json"
+        if not manifest_file.exists():
+            console.print(f"[bold red]Session manifest not found at: {manifest_file}[/bold red]")
+            raise typer.Exit(1)
+
+        with open(manifest_file) as f:
+            sess_meta = json.load(f)
+        mcap_path = sess_dir / Path(sess_meta.get("mcap_path", "recording.mcap")).name
+
+        frames = []
+        timestamps = []
+        with open(mcap_path, "rb") as f:
+            reader = make_reader(f)
+            for _, channel, message in reader.iter_messages():
+                if f"/{camera}/image_compressed" in channel.topic:
+                    pb = CompressedImage_pb2.CompressedImage()
+                    pb.ParseFromString(message.data)
+                    bgr = cv2.imdecode(np.frombuffer(pb.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if bgr is not None:
+                        frames.append(bgr)
+                        timestamps.append(message.publish_time)
+                        if len(frames) >= max_frames:
+                            break
+
+        res = estimator.process_frames(frames, timestamps)
+
+    table = Table(title="Cross-Device Optical QR Clock Synchronization")
+    table.add_column("Synchronization Parameter", style="cyan")
+    table.add_column("Measured Value", style="bold green")
+    table.add_row(
+        "Fitted Linear Model", f"t_mac = {res.slope_a:.8f} · t_phone + {res.intercept_b_s:.6f}s"
+    )
+    table.add_row("Initial Clock Offset", f"{res.offset_ms:+.3f} ms")
+    table.add_row("Relative Clock Drift", f"{res.drift_ppm:+.2f} PPM")
+    table.add_row("Residual Jitter (1-sigma)", f"{res.residual_jitter_std_ms:.2f} ms")
+    table.add_row("Residual Jitter (p99)", f"{res.residual_jitter_p99_ms:.2f} ms")
+    table.add_row(
+        "QR Decode Success",
+        f"{res.decoded_count}/{res.total_frames_checked} ({res.decode_success_rate * 100:.1f}%)",
+    )
+    console.print(table)
+
+    if res.error_budget_ms:
+        eb_table = Table(title="Sync Uncertainty Error Budget Breakdown")
+        eb_table.add_column("Error Contributor", style="yellow")
+        eb_table.add_column("Theoretical Bound", justify="right")
+        for k, v in res.error_budget_ms.items():
+            eb_table.add_row(k.replace("_", " ").title(), f"{v:.2f} ms")
+        console.print(eb_table)
+
+    console.print(f"[bold]{res.explanation}[/bold]")
+
+    # Save clock sync results
+    sync_res_path = sess_dir / "clock_sync.json"
+    with open(sync_res_path, "w") as f:
+        json.dump(
+            {
+                "offset_ms": res.offset_ms,
+                "drift_ppm": res.drift_ppm,
+                "residual_jitter_std_ms": res.residual_jitter_std_ms,
+                "residual_jitter_p99_ms": res.residual_jitter_p99_ms,
+                "slope_a": res.slope_a,
+                "intercept_b_s": res.intercept_b_s,
+                "decoded_count": res.decoded_count,
+                "decode_success_rate": res.decode_success_rate,
+                "error_budget_ms": res.error_budget_ms,
+            },
+            f,
+            indent=2,
+        )
+    console.print(f"Clock synchronization saved to: [cyan]{sync_res_path}[/cyan]")
 
 
 @sync_app.command("imu-cam")
@@ -590,14 +686,200 @@ def ingest_euroc(
         console.print(f"Report generated at: [cyan]{rep_path}[/cyan]")
 
 
-@app.command()
-def label(
-    session: Path = typer.Argument(
-        ..., help="Path to session for manual/interactive fault labelling"
+@ingest_app.command("sensorlogger")
+def ingest_sensorlogger(
+    dataset_path: Path = typer.Argument(..., help="Path to Sensor Logger folder or zip file"),
+    output_dir: Path | None = typer.Option(
+        None,
+        "--output-dir",
+        "-o",
+        help="Output directory for session manifest and MCAP",
+    ),
+    max_frames: int | None = typer.Option(
+        None,
+        "--max-frames",
+        "-m",
+        help="Limit video frames to process",
+    ),
+    run_qa: bool = typer.Option(
+        True,
+        "--qa/--no-qa",
+        help="Automatically run QA engine on ingested session",
     ),
 ) -> None:
-    """Interactive tool to label ground truth fault windows on real recordings."""
-    console.print(f"[bold green]Labelling session:[/bold green] [cyan]{session}[/cyan]")
+    """Ingest Nothing Phone recording from Sensor Logger (video + accelerometer + gyroscope)."""
+    from rigsim.ingest.sensor_logger import SensorLoggerIngestAdapter
+    from rigsim.qa.engine import QAEngine
+
+    out_dir = output_dir or Path(f"data/phone_ingested/{dataset_path.stem}")
+    console.print(
+        f"[bold green]Ingesting Sensor Logger dataset:[/bold green] [cyan]{dataset_path}[/cyan]"
+    )
+
+    adapter = SensorLoggerIngestAdapter(
+        input_path=dataset_path,
+        output_dir=out_dir,
+        max_frames=max_frames,
+    )
+    session = adapter.ingest()
+    console.print(
+        f"[bold green]✓ Ingest complete![/bold green] Session ID: [cyan]{session.session_id}[/cyan]"
+    )
+    console.print(f"MCAP written to: [cyan]{session.mcap_path}[/cyan]")
+
+    if run_qa:
+        console.print("[bold cyan]Running automated QA engine...[/bold cyan]")
+        qa_engine = QAEngine()
+        verdict = qa_engine.process_session(out_dir)
+        console.print(
+            f"Overall Verdict: [bold]{verdict.overall_verdict.value.upper()}[/bold] | "
+            f"Usable Yield: [bold green]{verdict.usable_percentage:.1f}%[/bold green]"
+        )
+
+
+@ingest_app.command("opencamera")
+def ingest_opencamera(
+    dataset_path: Path = typer.Argument(..., help="Path to OpenCamera Sensors folder"),
+    output_dir: Path | None = typer.Option(
+        None,
+        "--output-dir",
+        "-o",
+        help="Output directory for session manifest and MCAP",
+    ),
+    max_frames: int | None = typer.Option(
+        None,
+        "--max-frames",
+        "-m",
+        help="Limit video frames to process",
+    ),
+    run_qa: bool = typer.Option(
+        True,
+        "--qa/--no-qa",
+        help="Automatically run QA engine on ingested session",
+    ),
+) -> None:
+    """Ingest Nothing Phone recording from OpenCamera Sensors."""
+    from rigsim.ingest.opencamera import OpenCameraSensorsAdapter
+    from rigsim.qa.engine import QAEngine
+
+    out_dir = output_dir or Path(f"data/phone_ingested/{dataset_path.name}")
+    console.print(
+        f"[bold green]Ingesting OpenCamera Sensors dataset:[/bold green] [cyan]{dataset_path}[/cyan]"
+    )
+
+    adapter = OpenCameraSensorsAdapter(
+        input_dir=dataset_path,
+        output_dir=out_dir,
+        max_frames=max_frames,
+    )
+    session = adapter.ingest()
+    console.print(
+        f"[bold green]✓ Ingest complete![/bold green] Session ID: [cyan]{session.session_id}[/cyan]"
+    )
+    console.print(f"MCAP written to: [cyan]{session.mcap_path}[/cyan]")
+
+    if run_qa:
+        console.print("[bold cyan]Running automated QA engine...[/bold cyan]")
+        qa_engine = QAEngine()
+        verdict = qa_engine.process_session(out_dir)
+        console.print(
+            f"Overall Verdict: [bold]{verdict.overall_verdict.value.upper()}[/bold] | "
+            f"Usable Yield: [bold green]{verdict.usable_percentage:.1f}%[/bold green]"
+        )
+
+
+@app.command()
+def label(
+    session: Path = typer.Argument(..., help="Path to session directory for fault labelling"),
+    fault_type: str | None = typer.Option(
+        None,
+        "--fault-type",
+        "-t",
+        help="Fault type (e.g. motion_blur, underexposure, random_frame_drop)",
+    ),
+    stream_id: str = typer.Option("phone_cam", "--stream", "-s", help="Target sensor stream ID"),
+    t_start: float = typer.Option(
+        0.0, "--start", help="Fault start time in seconds relative to session start"
+    ),
+    t_end: float = typer.Option(
+        1.0, "--end", help="Fault end time in seconds relative to session start"
+    ),
+    severity: float = typer.Option(1.0, "--severity", help="Severity level from 0.0 to 1.0"),
+    labels_csv: Path | None = typer.Option(None, "--csv", help="Import fault labels from CSV file"),
+) -> None:
+    """Label ground truth fault windows on real recordings for QA benchmarking."""
+    import json
+
+    import pandas as pd
+
+    from rigsim.config.faults import FaultLabel
+    from rigsim.config.types import FaultType
+
+    sess_dir = session.parent if session.is_file() else session
+    manifest_file = sess_dir / "session.json"
+    if not manifest_file.exists():
+        console.print(f"[bold red]Session manifest not found at: {manifest_file}[/bold red]")
+        raise typer.Exit(1)
+
+    with open(manifest_file) as f:
+        sess_data = json.load(f)
+
+    labels_file = sess_dir / "labels.json"
+    existing_labels = []
+    if labels_file.exists():
+        with open(labels_file) as f:
+            existing_labels = json.load(f)
+
+    t_base_ns = 1_700_000_000_000_000_000
+
+    if labels_csv and labels_csv.exists():
+        console.print(f"Importing labels from CSV: [cyan]{labels_csv}[/cyan]")
+        df = pd.read_csv(labels_csv)
+        for _, row in df.iterrows():
+            f_type = str(row["fault_type"])
+            s_id = str(row.get("stream_id", stream_id))
+            st_s = float(row.get("t_start_s", row.get("start", 0.0)))
+            et_s = float(row.get("t_end_s", row.get("end", 1.0)))
+            sev = float(row.get("severity", 1.0))
+            lbl = FaultLabel(
+                fault_type=FaultType(f_type),
+                stream_id=s_id,
+                t_start_ns=t_base_ns + int(st_s * 1e9),
+                t_end_ns=t_base_ns + int(et_s * 1e9),
+                severity=sev,
+                params={"source": "csv_import"},
+            )
+            existing_labels.append(lbl.model_dump())
+    elif fault_type:
+        lbl = FaultLabel(
+            fault_type=FaultType(fault_type),
+            stream_id=stream_id,
+            t_start_ns=t_base_ns + int(t_start * 1e9),
+            t_end_ns=t_base_ns + int(t_end * 1e9),
+            severity=severity,
+            params={"source": "cli_label"},
+        )
+        existing_labels.append(lbl.model_dump())
+        console.print(
+            f"Added label: [bold cyan]{fault_type}[/bold cyan] on stream [yellow]{stream_id}[/yellow] [{t_start:.2f}s - {t_end:.2f}s]"
+        )
+    else:
+        console.print(
+            "[yellow]No labels specified. Use --fault-type or --csv to add ground truth labels.[/yellow]"
+        )
+        return
+
+    with open(labels_file, "w") as f:
+        json.dump(existing_labels, f, indent=2)
+
+    # Update session manifest with labels path
+    sess_data["ground_truth_labels_path"] = str(labels_file.resolve())
+    with open(manifest_file, "w") as f:
+        json.dump(sess_data, f, indent=2)
+
+    console.print(
+        f"[bold green]✓ Saved {len(existing_labels)} ground-truth labels to:[/bold green] [cyan]{labels_file}[/cyan]"
+    )
 
 
 @app.command()
