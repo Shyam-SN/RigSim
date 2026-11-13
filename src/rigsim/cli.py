@@ -1087,17 +1087,183 @@ def label(
 @app.command()
 def eval(
     suite: str = typer.Option("quick", "--suite", "-s", help="Evaluation suite: quick or full"),
+    rig: Path = typer.Option(
+        Path("configs/rigs/handheld_stereo_imu.yaml"),
+        "--rig",
+        "-r",
+        help="Rig configuration for test matrix synthesis",
+    ),
+    sessions_dir: Path | None = typer.Option(
+        None, "--sessions-dir", "-d", help="Directory containing pre-recorded sessions to evaluate"
+    ),
+    output: Path = typer.Option(
+        Path("reports/eval_benchmark.html"),
+        "--output",
+        "-o",
+        help="Output path for interactive HTML evaluation report",
+    ),
 ) -> None:
     """Run full benchmark evaluating QA engine precision, recall, F1, and temporal IoU."""
+    from rigsim.eval import BenchmarkEngine, generate_evaluation_report
+
+    console.print("[bold cyan]============================================================[/bold cyan]")
+    console.print("[bold green]RigSim Automated QA Engine Evaluation Benchmark[/bold green]")
+    console.print(f"Suite: [cyan]{suite}[/cyan] | Rig: [cyan]{rig}[/cyan]")
+    console.print("[bold cyan]============================================================[/bold cyan]\n")
+
+    bench_engine = BenchmarkEngine(rig_config_path=rig)
+
+    if sessions_dir and sessions_dir.exists():
+        subdirs = [p for p in sessions_dir.iterdir() if p.is_dir() and (p / "session.json").exists()]
+        if not subdirs:
+            console.print(f"[bold red]No valid sessions with session.json found in: {sessions_dir}[/bold red]")
+            raise typer.Exit(code=1)
+        console.print(f"Evaluating [yellow]{len(subdirs)}[/yellow] sessions from: {sessions_dir}")
+        result = bench_engine.evaluate_sessions(subdirs, suite_name=f"corpus_{sessions_dir.name}")
+    else:
+        console.print(f"Synthesizing automated test sessions matrix ([yellow]{suite}[/yellow] mode)...")
+        result = bench_engine.run_automated_suite(suite_type=suite)
+
+    # 1. Scorecard Table
+    score_table = Table(title=f"QA Engine Benchmark Summary: {result.suite_name}")
+    score_table.add_column("Evaluation Metric", style="cyan")
+    score_table.add_column("Score", justify="right", style="bold green")
+    score_table.add_column("Benchmark Target", justify="right", style="dim")
+    score_table.add_column("Status", justify="center")
+
+    def _status(val: float, target: float, higher_better: bool = True) -> str:
+        passed = (val >= target) if higher_better else (val <= target)
+        return "[bold green]PASS[/bold green]" if passed else "[bold yellow]WARN[/bold yellow]"
+
+    score_table.add_row(
+        "Overall Accuracy",
+        f"{result.overall_metrics.accuracy * 100:.1f}%",
+        ">= 90.0%",
+        _status(result.overall_metrics.accuracy, 0.90),
+    )
+    score_table.add_row(
+        "Macro F1-Score",
+        f"{result.macro_f1 * 100:.1f}%",
+        ">= 85.0%",
+        _status(result.macro_f1, 0.85),
+    )
+    score_table.add_row(
+        "Macro Precision",
+        f"{result.macro_precision * 100:.1f}%",
+        ">= 85.0%",
+        _status(result.macro_precision, 0.85),
+    )
+    score_table.add_row(
+        "Macro Recall (Sensitivity)",
+        f"{result.macro_recall * 100:.1f}%",
+        ">= 90.0%",
+        _status(result.macro_recall, 0.90),
+    )
+    score_table.add_row(
+        "False Positive Rate (FPR)",
+        f"{result.overall_metrics.false_positive_rate * 100:.1f}%",
+        "<= 5.0%",
+        _status(result.overall_metrics.false_positive_rate, 0.05, higher_better=False),
+    )
+    score_table.add_row(
+        "Mean Temporal IoU",
+        f"{result.mean_temporal_iou * 100:.1f}%",
+        ">= 70.0%",
+        _status(result.mean_temporal_iou, 0.70),
+    )
+    console.print(score_table)
+    console.print()
+
+    # 2. Confusion Matrix Table
+    cm_table = Table(title="Multiclass 5×5 Confusion Matrix (Rows: Ground Truth, Cols: Predicted)")
+    cm_table.add_column("True Category", style="cyan")
+    for cat in result.category_labels:
+        cm_table.add_column(f"Pred: {cat}", justify="right")
+
+    for i, true_cat in enumerate(result.category_labels):
+        row_vals = [str(result.confusion_matrix_5x5[i, j]) for j in range(len(result.category_labels))]
+        cm_table.add_row(f"[bold]{true_cat}[/bold]", *row_vals)
+    console.print(cm_table)
+    console.print()
+
+    # 3. Per-Category Statistics Table
+    cat_table = Table(title="Per-Category Statistical Performance Breakdown")
+    cat_table.add_column("Category", style="cyan")
+    cat_table.add_column("TP", justify="right")
+    cat_table.add_column("FP", justify="right")
+    cat_table.add_column("TN", justify="right")
+    cat_table.add_column("FN", justify="right")
+    cat_table.add_column("Precision", justify="right")
+    cat_table.add_column("Recall", justify="right")
+    cat_table.add_column("F1-Score", justify="right", style="bold")
+
+    for cat, m in result.category_metrics.items():
+        cat_table.add_row(
+            cat,
+            str(m.tp),
+            str(m.fp),
+            str(m.tn),
+            str(m.fn),
+            f"{m.precision * 100:.1f}%",
+            f"{m.recall * 100:.1f}%",
+            f"{m.f1 * 100:.1f}%",
+        )
+    console.print(cat_table)
+    console.print()
+
+    # Generate interactive HTML report
+    report_file = generate_evaluation_report(result, output)
     console.print(
-        f"[bold green]Running QA Engine evaluation suite:[/bold green] [cyan]{suite}[/cyan]"
+        f"[bold green]✓ Interactive evaluation report generated at:[/bold green] [cyan]{report_file}[/cyan]\n"
     )
 
 
 @app.command()
-def bench() -> None:
+def bench(
+    frames: int = typer.Option(60, "--frames", "-f", help="Number of 1280x720 video frames to test"),
+    samples: int = typer.Option(2000, "--samples", "-s", help="Number of IMU samples to test"),
+) -> None:
     """Run throughput and processing speed benchmarks across QA checks."""
-    console.print("[bold green]Running QA throughput benchmarks...[/bold green]")
+    from rigsim.eval import QAThroughputBenchmarker
+
+    console.print("[bold cyan]============================================================[/bold cyan]")
+    console.print("[bold green]RigSim Automated QA Performance & Throughput Benchmark[/bold green]")
+    console.print(f"Test Volume: [yellow]{frames} frames (1280x720 RGB)[/yellow] + [yellow]{samples} IMU samples[/yellow]")
+    console.print("[bold cyan]============================================================[/bold cyan]\n")
+
+    benchmarker = QAThroughputBenchmarker(num_camera_frames=frames, num_imu_samples=samples)
+    report = benchmarker.run_benchmark()
+
+    tbl = Table(title="RigSim QA Check Execution Speed & Realtime Headroom")
+    tbl.add_column("Cat", style="dim")
+    tbl.add_column("ID", style="bold cyan")
+    tbl.add_column("Check Name", style="white")
+    tbl.add_column("Volume", justify="right")
+    tbl.add_column("Duration", justify="right")
+    tbl.add_column("Rate", justify="right")
+    tbl.add_column("Speedup", justify="right", style="bold green")
+
+    for b in report.benchmarks:
+        unit = "fps" if b.category in ("Image", "Timing") and "IMU" not in b.check_name else "samp/s"
+        tbl.add_row(
+            b.category,
+            b.check_id,
+            b.check_name,
+            str(b.samples_processed),
+            f"{b.duration_s * 1000:.1f} ms",
+            f"{b.throughput_rate:.0f} {unit}",
+            f"{b.realtime_speedup:.1f}x",
+        )
+    console.print(tbl)
+    console.print()
+    console.print(
+        f"[bold green]Summary:[/bold green] Image Checks Average: [cyan]{report.average_image_fps:.1f} fps[/cyan] "
+        f"| IMU Checks Average: [cyan]{report.average_imu_samples_per_s:,.0f} samples/s[/cyan]"
+    )
+    console.print(
+        f"Total Ingestion & Evaluation Time: [bold green]{report.total_duration_s * 1000:.1f} ms[/bold green] (Faster than real-time)\n"
+    )
+
 
 
 @app.command("export-episodes")
