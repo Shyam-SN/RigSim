@@ -17,7 +17,6 @@ from rigsim.config.qa import QAResult, QAVerdict, SessionVerdict
 from rigsim.config.session import Session
 from rigsim.qa.engine import QAEngine
 
-
 SESSION_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -74,7 +73,7 @@ SESSION_TEMPLATE = """<!DOCTYPE html>
     .badge-PASS { background: rgba(16, 185, 129, 0.2); color: var(--pass); border: 1px solid var(--pass); }
     .badge-WARN { background: rgba(245, 158, 11, 0.2); color: var(--warn); border: 1px solid var(--warn); }
     .badge-FAIL { background: rgba(239, 68, 68, 0.2); color: var(--fail); border: 1px solid var(--fail); }
-    
+
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -89,7 +88,7 @@ SESSION_TEMPLATE = """<!DOCTYPE html>
     }
     .stat-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; font-weight: 600; }
     .stat-val { font-size: 22px; font-weight: 700; color: var(--text); margin-top: 4px; }
-    
+
     .summary-box {
       margin-top: 16px;
       padding: 12px 16px;
@@ -98,7 +97,7 @@ SESSION_TEMPLATE = """<!DOCTYPE html>
       border-radius: 4px;
       font-size: 14px;
     }
-    
+
     .section {
       background: var(--card-bg);
       border: 1px solid var(--border);
@@ -117,7 +116,7 @@ SESSION_TEMPLATE = """<!DOCTYPE html>
       border-bottom: 1px solid var(--border);
       padding-bottom: 10px;
     }
-    
+
     .chart-container {
       margin: 16px 0;
       border-radius: 8px;
@@ -125,7 +124,7 @@ SESSION_TEMPLATE = """<!DOCTYPE html>
       background: #111827;
       border: 1px solid var(--border);
     }
-    
+
     table {
       width: 100%;
       border-collapse: collapse;
@@ -145,7 +144,7 @@ SESSION_TEMPLATE = """<!DOCTYPE html>
       font-size: 11px;
     }
     tr:hover { background: rgba(51, 65, 85, 0.3); }
-    
+
     .status-pill {
       display: inline-block;
       padding: 2px 8px;
@@ -156,7 +155,7 @@ SESSION_TEMPLATE = """<!DOCTYPE html>
     .status-PASS { background: rgba(16, 185, 129, 0.2); color: var(--pass); }
     .status-WARN { background: rgba(245, 158, 11, 0.2); color: var(--warn); }
     .status-FAIL { background: rgba(239, 68, 68, 0.2); color: var(--fail); }
-    
+
     .gallery {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -200,7 +199,7 @@ SESSION_TEMPLATE = """<!DOCTYPE html>
           <span class="badge badge-{{ verdict.overall_verdict.value }}">{{ verdict.overall_verdict.value }}</span>
         </div>
       </div>
-      
+
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-label">Data Yield (Usable %)</div>
@@ -223,7 +222,7 @@ SESSION_TEMPLATE = """<!DOCTYPE html>
           <div class="stat-val">{{ session.streams|length }}</div>
         </div>
       </div>
-      
+
       <div class="summary-box">
         <strong>Verdict Summary:</strong> {{ verdict.summary_sentence }}
       </div>
@@ -254,7 +253,7 @@ SESSION_TEMPLATE = """<!DOCTYPE html>
       <div class="chart-container">
         {{ image_div|safe }}
       </div>
-      
+
       {% if thumbnails %}
       <div style="margin-top: 24px;">
         <h4 style="font-size: 14px; font-weight: 700; margin-bottom: 12px; color: var(--text);">Flagged Defect Frame Evidence:</h4>
@@ -291,7 +290,7 @@ SESSION_TEMPLATE = """<!DOCTYPE html>
       <div class="chart-container">
         {{ calib_div|safe }}
       </div>
-      
+
       {% if calib_params %}
       <div style="margin-top: 16px;">
         <h4 style="font-size: 14px; font-weight: 700; margin-bottom: 8px;">Active Calibration Parameters:</h4>
@@ -362,7 +361,13 @@ def _read_session_mcap_data(mcap_path: Path) -> dict[str, Any]:
     cam_timestamps: dict[str, list[int]] = {}
     cam_latencies: dict[str, list[float]] = {}
     sample_frames: dict[str, dict[int, bytes]] = {}
-    imu_data = {"times_s": [], "gyro_norm": [], "accel_norm": [], "angular_velocity": [], "linear_acceleration": []}
+    imu_data: dict[str, list[Any]] = {
+        "times_s": [],
+        "gyro_norm": [],
+        "accel_norm": [],
+        "angular_velocity": [],
+        "linear_acceleration": [],
+    }
 
     if not mcap_path.exists():
         return {
@@ -504,7 +509,9 @@ def generate_session_report(
     for r in qa_results:
         if r.verdict == QAVerdict.PASS or not r.flagged_windows:
             continue
-        color = "rgba(239, 68, 68, 0.75)" if r.verdict == QAVerdict.FAIL else "rgba(245, 158, 11, 0.75)"
+        color = (
+            "rgba(239, 68, 68, 0.75)" if r.verdict == QAVerdict.FAIL else "rgba(245, 158, 11, 0.75)"
+        )
         border_col = "#EF4444" if r.verdict == QAVerdict.FAIL else "#F59E0B"
 
         y_indices = []
@@ -515,8 +522,8 @@ def generate_session_report(
             y_indices = [0]
 
         for w in r.flagged_windows:
-            w_start_val = w.t_start_ns if hasattr(w, "t_start_ns") else w.get("t_start_ns", t0_ns)
-            w_end_val = w.t_end_ns if hasattr(w, "t_end_ns") else w.get("t_end_ns", t0_ns)
+            w_start_val = w.get("t_start_ns", t0_ns) if isinstance(w, dict) else w.t_start_ns
+            w_end_val = w.get("t_end_ns", t0_ns) if isinstance(w, dict) else w.t_end_ns
             st_s = max(0.0, (w_start_val - t0_ns) / 1e9)
             et_s = max(st_s + 0.05, (w_end_val - t0_ns) / 1e9)
             for y_idx in y_indices:
@@ -605,7 +612,10 @@ def generate_session_report(
     fig_image = make_subplots(
         rows=1,
         cols=2,
-        subplot_titles=("Normalized Sharpness Ratio (Blur Check)", "Mean Pixel Brightness (Exposure)"),
+        subplot_titles=(
+            "Normalized Sharpness Ratio (Blur Check)",
+            "Mean Pixel Brightness (Exposure)",
+        ),
     )
     for r in qa_results:
         if r.check_id == "I1_BLUR" and "evidence" in r.model_dump():
@@ -767,7 +777,7 @@ def generate_session_report(
         if r.verdict in [QAVerdict.FAIL, QAVerdict.WARN] and r.flagged_windows:
             stream_frames = sample_frames.get(r.stream_id, {})
             for w in r.flagged_windows[:3]:  # up to 3 per defect
-                w_start = w.t_start_ns if hasattr(w, "t_start_ns") else w.get("t_start_ns", 0)
+                w_start = w.get("t_start_ns", 0) if isinstance(w, dict) else w.t_start_ns
                 # Find closest frame
                 closest_ts = None
                 closest_dist = float("inf")
@@ -800,13 +810,13 @@ def generate_session_report(
 
     # 9. Extract calibration parameter summaries
     calib_params = []
-    for s in session.streams:
-        if s.intrinsics:
-            intr = s.intrinsics
-            dist_str = s.distortion.model if s.distortion else "none"
+    for stm in session.streams:
+        if stm.intrinsics:
+            intr = stm.intrinsics
+            dist_str = stm.distortion.model.value if stm.distortion else "none"
             calib_params.append(
                 {
-                    "camera": s.stream_id,
+                    "camera": stm.stream_id,
                     "focal_length": f"({intr.fx:.1f}, {intr.fy:.1f})",
                     "principal_point": f"({intr.cx:.1f}, {intr.cy:.1f})",
                     "distortion": dist_str,

@@ -1,16 +1,15 @@
 """Unit tests for Milestone M5: Single-session report, batch report, and Foxglove MCAP annotations."""
 
-import json
 from pathlib import Path
 
 import numpy as np
 import pytest
 from mcap.reader import make_reader
 
-from rigsim.config.transform import Transform
 from rigsim.config.camera import CameraIntrinsics
 from rigsim.config.qa import QAResult, QAVerdict, SessionVerdict, TimeWindow
 from rigsim.config.session import Session, SessionSource, Stream
+from rigsim.config.transform import Transform
 from rigsim.config.types import SensorKind
 from rigsim.io.mcap_writer import RigSimMCAPWriter
 from rigsim.report.batch_report import generate_batch_report
@@ -64,7 +63,9 @@ def mock_session_dir(tmp_path: Path) -> Path:
                 clock_id="clock_wrist",
                 frame_id="cam_wrist_optical",
                 extrinsics=Transform.identity(),
-                intrinsics=CameraIntrinsics(fx=100.0, fy=100.0, cx=80.0, cy=60.0, width=160, height=120, fov_deg=60.0),
+                intrinsics=CameraIntrinsics(
+                    fx=100.0, fy=100.0, cx=80.0, cy=60.0, width=160, height=120, fov_deg=60.0
+                ),
             ),
             Stream(
                 stream_id="imu_rig",

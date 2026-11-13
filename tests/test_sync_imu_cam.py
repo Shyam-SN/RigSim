@@ -5,7 +5,6 @@ import numpy as np
 from rigsim.config.qa import TimingThresholds
 from rigsim.config.types import QAVerdict
 from rigsim.qa.timing import check_t7_imu_cam_offset
-from rigsim.sync.imu_cam import ImuCameraSyncEstimator
 
 
 def test_imu_cam_sync_synthetic_offset() -> None:
@@ -28,14 +27,6 @@ def test_imu_cam_sync_synthetic_offset() -> None:
 
     omega_vis = np.abs(omega_profile(t_cam))
     omega_gyro = np.abs(omega_profile(t_imu + true_offset_s))
-
-    # Convert to 3D gyro vector
-    gyro_readings = np.column_stack([omega_gyro, np.zeros_like(omega_gyro), np.zeros_like(omega_gyro)])
-
-    # Synthetic image frames simulating visual rotation
-    frames = [np.full((120, 160, 3), int(100 + 50 * np.sin(k)), dtype=np.uint8) for k in range(len(t_cam))]
-
-    estimator = ImuCameraSyncEstimator(max_lag_ms=50.0, grid_dt_s=0.001)
 
     # Direct cross-correlation on 1D angular rate curves
     grid_t = np.arange(1.0, 4.0, 0.001)

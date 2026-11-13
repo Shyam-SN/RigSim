@@ -50,7 +50,9 @@ class SessionVerdict(BaseModel):
 
     @property
     def summary_sentence(self) -> str:
-        return "; ".join(self.summary_rules) if self.summary_rules else "All critical checks passed."
+        return (
+            "; ".join(self.summary_rules) if self.summary_rules else "All critical checks passed."
+        )
 
     @property
     def critical_failures_count(self) -> int:

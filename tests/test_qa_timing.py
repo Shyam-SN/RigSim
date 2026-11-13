@@ -110,12 +110,16 @@ def test_t6_inter_cam_sync(default_thresholds: TimingThresholds) -> None:
     ts_ref = [1_000_000_000 + i * 33_333_333 for i in range(100)]
     ts_sec = [t + 200_000 for t in ts_ref]
 
-    res_good = check_t6_inter_camera_sync("cam_left", "cam_right", ts_ref, ts_sec, default_thresholds)
+    res_good = check_t6_inter_camera_sync(
+        "cam_left", "cam_right", ts_ref, ts_sec, default_thresholds
+    )
     assert res_good.verdict == QAVerdict.PASS
 
     # Pair with large offset (5.0 ms)
     ts_bad = [t + 5_000_000 for t in ts_ref]
-    res_bad = check_t6_inter_camera_sync("cam_left", "cam_right", ts_ref, ts_bad, default_thresholds)
+    res_bad = check_t6_inter_camera_sync(
+        "cam_left", "cam_right", ts_ref, ts_bad, default_thresholds
+    )
     assert res_bad.verdict == QAVerdict.FAIL
 
 

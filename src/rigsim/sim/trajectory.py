@@ -14,7 +14,7 @@ class PoseTrajectorySample:
     quaternion_wxyz: np.ndarray  # MuJoCo format: [w, x, y, z]
     linear_velocity: np.ndarray  # [vx, vy, vz] in m/s
     angular_velocity: np.ndarray  # [wx, wy, wz] in rad/s
-    linear_acceleration: np.ndarray = None  # [ax, ay, az] in m/s^2
+    linear_acceleration: np.ndarray | None = None  # [ax, ay, az] in m/s^2
 
 
 class TrajectoryGenerator:

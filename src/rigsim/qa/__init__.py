@@ -49,4 +49,3 @@ __all__ = [
     "check_m3_imu_bias_jump",
     "check_m4_imu_gravity_direction",
 ]
-

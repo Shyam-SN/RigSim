@@ -6,8 +6,8 @@ from pathlib import Path
 import mujoco
 import numpy as np
 import yaml
-from scipy.spatial.transform import Rotation
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
+from scipy.spatial.transform import Rotation
 
 from rigsim.clocks.model import ClockEngine, TransportDelayEngine
 from rigsim.config.faults import FaultScenarioConfig
@@ -94,9 +94,7 @@ class SimulationEngine:
         # Initialize IMU simulator
         if rig_config.imu is not None:
             self.imu_sim: IMUSimulator | None = IMUSimulator(rig_config.imu, seed=seed)
-            accel_id = mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_accel"
-            )
+            accel_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_accel")
             gyro_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_gyro")
             quat_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_quat")
 

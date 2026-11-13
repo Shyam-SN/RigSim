@@ -1,6 +1,6 @@
 """Geometric calibration quality assurance checks: C1, C2, C3, and C4."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import cv2
 import numpy as np
@@ -16,7 +16,9 @@ def check_c1_charuco_reprojection(
     thresholds: CalibrationThresholds,
 ) -> QAResult:
     """C1: ChArUco mono calibration reprojection RMS error."""
-    verdict = QAVerdict.FAIL if rms_px > thresholds.max_charuco_reprojection_rms_px else QAVerdict.PASS
+    verdict = (
+        QAVerdict.FAIL if rms_px > thresholds.max_charuco_reprojection_rms_px else QAVerdict.PASS
+    )
     if verdict == QAVerdict.FAIL:
         explanation = (
             f"FAIL: ChArUco reprojection error {rms_px:.3f} px exceeds limit "
@@ -121,7 +123,9 @@ def check_c2_camera_bump(
             rot_deg > thresholds.max_bump_rotation_deg
             or trans_mm > thresholds.max_bump_translation_mm
         ):
-            flagged_windows.append({"t_start_ns": timestamps_ns[idx], "t_end_ns": timestamps_ns[idx]})
+            flagged_windows.append(
+                {"t_start_ns": timestamps_ns[idx], "t_end_ns": timestamps_ns[idx]}
+            )
 
     verdict = QAVerdict.FAIL if len(flagged_windows) > 0 else QAVerdict.PASS
 
@@ -144,7 +148,9 @@ def check_c2_camera_bump(
         metric_name="max_bump_rotation_deg",
         value=float(max_rot_deg),
         threshold=thresholds.max_bump_rotation_deg,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
         evidence={
             "max_rotation_deg": max_rot_deg,
             "max_translation_mm": max_trans_mm,
@@ -193,7 +199,9 @@ def check_c3_stereo_consistency(
                 epipolar_errors_px.append(mean_err)
 
                 if mean_err > thresholds.max_epipolar_error_px:
-                    flagged_windows.append({"t_start_ns": timestamps_ns[i], "t_end_ns": timestamps_ns[i]})
+                    flagged_windows.append(
+                        {"t_start_ns": timestamps_ns[i], "t_end_ns": timestamps_ns[i]}
+                    )
 
     if not epipolar_errors_px:
         return QAResult(
@@ -228,7 +236,9 @@ def check_c3_stereo_consistency(
         metric_name="max_epipolar_error_px",
         value=max_err,
         threshold=thresholds.max_epipolar_error_px,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
         evidence={"mean_epipolar_error_px": mean_err, "max_epipolar_error_px": max_err},
         explanation=explanation,
     )
@@ -241,11 +251,11 @@ def check_c4_calibration_staleness(
     max_age_days: float = 7.0,
 ) -> QAResult:
     """C4: Calibration staleness check according to operational SLA."""
-    now = session_date or datetime.now(timezone.utc)
+    now = session_date or datetime.now(UTC)
     if calibration_date.tzinfo is None:
-        calibration_date = calibration_date.replace(tzinfo=timezone.utc)
+        calibration_date = calibration_date.replace(tzinfo=UTC)
     if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+        now = now.replace(tzinfo=UTC)
 
     age_days = float((now - calibration_date).total_seconds() / 86400.0)
     verdict = QAVerdict.WARN if age_days > max_age_days else QAVerdict.PASS
@@ -256,7 +266,9 @@ def check_c4_calibration_staleness(
             f"re-calibration recommended."
         )
     else:
-        explanation = f"Calibration current ({age_days:.1f} days old <= limit {max_age_days:.1f} days)."
+        explanation = (
+            f"Calibration current ({age_days:.1f} days old <= limit {max_age_days:.1f} days)."
+        )
 
     return QAResult(
         check_id="C4_CALIBRATION_STALENESS",
@@ -268,4 +280,3 @@ def check_c4_calibration_staleness(
         evidence={"age_days": age_days, "calibration_date": calibration_date.isoformat()},
         explanation=explanation,
     )
-

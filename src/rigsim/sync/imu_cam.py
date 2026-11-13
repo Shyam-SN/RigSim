@@ -85,10 +85,10 @@ class ImuCameraSyncEstimator:
             omega_mag = 0.0
             if pts_prev is not None and len(pts_prev) >= self.min_features:
                 # Track using Lucas-Kanade optical flow
-                pts_curr, status, _ = cv2.calcOpticalFlowPyrLK(
+                pts_curr, status, _ = cv2.calcOpticalFlowPyrLK(  # type: ignore[call-overload]
                     prev_gray, curr_gray, pts_prev, None, winSize=(21, 21), maxLevel=3
                 )
-                valid = (status.flatten() == 1)
+                valid = status.flatten() == 1
                 p0 = pts_prev[valid]
                 p1 = pts_curr[valid]
 
@@ -166,12 +166,17 @@ class ImuCameraSyncEstimator:
         center = len(sig_imu_norm) - 1
         corr_slice = corr[center - max_lag_samples : center + max_lag_samples + 1] / len(grid_t)
 
-        # 6. Peak search with MAP prior (disambiguate periodic side-lobes within 3% of global max)
-        global_max_val = float(np.max(corr_slice))
-        candidates = np.where(corr_slice >= (global_max_val - 0.03))[0]
-        if len(candidates) > 1:
-            # Prioritize candidate closest to zero lag to avoid periodic waveform aliasing
-            peak_idx = int(candidates[np.argmin(np.abs(lags[candidates]))])
+        # 6. Peak search with MAP prior (disambiguate distinct periodic local maxima within 3% of max)
+        from scipy.signal import find_peaks
+
+        peaks, _ = find_peaks(corr_slice)
+        if len(peaks) > 0:
+            max_val = float(np.max(corr_slice[peaks]))
+            competitive = [p for p in peaks if corr_slice[p] >= max_val - 0.03]
+            if len(competitive) > 1:
+                peak_idx = int(competitive[np.argmin(np.abs(lags[competitive]))])
+            else:
+                peak_idx = int(peaks[np.argmax(corr_slice[peaks])])
         else:
             peak_idx = int(np.argmax(corr_slice))
 

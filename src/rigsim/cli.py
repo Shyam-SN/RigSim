@@ -14,6 +14,12 @@ app = typer.Typer(
 sync_app = typer.Typer(name="sync", help="Sensor synchronization tools (QR clock, IMU-camera)")
 app.add_typer(sync_app, name="sync")
 
+ingest_app = typer.Typer(
+    name="ingest",
+    help="Ingest real-world dataset formats (EuRoC, SensorLogger, OpenCamera, Mac webcam)",
+)
+app.add_typer(ingest_app, name="ingest")
+
 console = Console()
 
 
@@ -96,17 +102,21 @@ def calibrate(
 ) -> None:
     """Perform intrinsic and stereo calibration using ChArUco fiducials."""
     import json
+
     import cv2
     import numpy as np
     from foxglove_schemas_protobuf import CompressedImage_pb2
     from mcap.reader import make_reader
+
     from rigsim.calib.charuco import CharucoCalibrator
 
     console.print(
         f"[bold green]Running calibration on:[/bold green] [cyan]{session_or_folder}[/cyan]"
     )
 
-    manifest_file = session_or_folder / "session.json" if session_or_folder.is_dir() else session_or_folder
+    manifest_file = (
+        session_or_folder / "session.json" if session_or_folder.is_dir() else session_or_folder
+    )
     if manifest_file.exists():
         with open(manifest_file) as f:
             sess_meta = json.load(f)
@@ -124,13 +134,19 @@ def calibrate(
     with open(mcap_path, "rb") as f:
         reader = make_reader(f)
         for schema, channel, message in reader.iter_messages():
-            if "cam_stereo_left/image_compressed" in channel.topic or "cam0/image_compressed" in channel.topic:
+            if (
+                "cam_stereo_left/image_compressed" in channel.topic
+                or "cam0/image_compressed" in channel.topic
+            ):
                 pb = CompressedImage_pb2.CompressedImage()
                 pb.ParseFromString(message.data)
                 bgr = cv2.imdecode(np.frombuffer(pb.data, dtype=np.uint8), cv2.IMREAD_COLOR)
                 if bgr is not None:
                     left_frames.append(bgr)
-            elif "cam_stereo_right/image_compressed" in channel.topic or "cam1/image_compressed" in channel.topic:
+            elif (
+                "cam_stereo_right/image_compressed" in channel.topic
+                or "cam1/image_compressed" in channel.topic
+            ):
                 pb = CompressedImage_pb2.CompressedImage()
                 pb.ParseFromString(message.data)
                 bgr = cv2.imdecode(np.frombuffer(pb.data, dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -190,12 +206,16 @@ def calibrate(
         s_table.add_column("Value", style="bold green")
         s_table.add_row("Stereo RMS Error", f"{stereo_res.rms_stereo_px:.3f} px")
         s_table.add_row("Baseline Distance", f"{stereo_res.baseline_m * 1000.0:.2f} mm")
-        s_table.add_row("Translation [Tx, Ty, Tz]", str(np.round(stereo_res.T.ravel() * 1000.0, 2)) + " mm")
+        s_table.add_row(
+            "Translation [Tx, Ty, Tz]", str(np.round(stereo_res.T.ravel() * 1000.0, 2)) + " mm"
+        )
         s_table.add_row("Stereo Pairs Used", str(stereo_res.num_stereo_pairs))
         console.print(s_table)
 
     # Save results
-    out_dir = output_dir or (manifest_file.parent / "calib" if manifest_file.exists() else Path("data/calib"))
+    out_dir = output_dir or (
+        manifest_file.parent / "calib" if manifest_file.exists() else Path("data/calib")
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     calib_json = {
         "rms_px": mono_left.rms_reprojection_px,
@@ -206,11 +226,15 @@ def calibrate(
             "baseline_m": stereo_res.baseline_m,
             "R": stereo_res.R.tolist(),
             "T": stereo_res.T.tolist(),
-        } if stereo_res else None,
+        }
+        if stereo_res
+        else None,
     }
     with open(out_dir / "calibration.json", "w") as f:
         json.dump(calib_json, f, indent=2)
-    console.print(f"[bold green]Saved calibration parameters to:[/bold green] {out_dir / 'calibration.json'}")
+    console.print(
+        f"[bold green]Saved calibration parameters to:[/bold green] {out_dir / 'calibration.json'}"
+    )
 
 
 @app.command()
@@ -226,6 +250,7 @@ def qa(
     """Run full automated QA engine on a session and output PASS/WARN/FAIL verdicts."""
     console.print(f"[bold green]Running QA Engine on:[/bold green] [cyan]{session}[/cyan]")
     import yaml
+
     from rigsim.config.qa import QAThresholdsConfig
     from rigsim.qa.engine import QAEngine
 
@@ -244,38 +269,41 @@ def report(
     batch: Path | None = typer.Option(
         None, "--batch", "-b", help="Folder containing multiple sessions for multi-session summary"
     ),
-    output: Path | None = typer.Option(
-        None, "--output", "-o", help="Target output HTML file path"
-    ),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Target output HTML file path"),
     annotate_mcap: bool = typer.Option(
-        True, "--annotate-mcap/--no-annotate-mcap", help="Export QA defect events as Foxglove MCAP annotations"
+        True,
+        "--annotate-mcap/--no-annotate-mcap",
+        help="Export QA defect events as Foxglove MCAP annotations",
     ),
 ) -> None:
     """Generate offline self-contained HTML report (single session or multi-session batch)."""
-    from rigsim.report.session_report import generate_session_report
+    import json
+
+    from rigsim.config.qa import SessionVerdict
+    from rigsim.config.session import Session
+    from rigsim.qa.engine import QAEngine
     from rigsim.report.batch_report import generate_batch_report
     from rigsim.report.foxglove import export_foxglove_annotations
-    from rigsim.qa.engine import QAEngine
-    from rigsim.config.session import Session
-    from rigsim.config.qa import QAResult, SessionVerdict
-    import json
+    from rigsim.report.session_report import generate_session_report
 
     if batch:
         console.print(
             f"[bold green]Generating multi-session summary report for:[/bold green] [cyan]{batch}[/cyan]"
         )
         out_html = generate_batch_report(batch, output_html=output)
-        console.print(f"[bold green]✓ Fleet summary report generated:[/bold green] [cyan]{out_html}[/cyan]")
+        console.print(
+            f"[bold green]✓ Fleet summary report generated:[/bold green] [cyan]{out_html}[/cyan]"
+        )
     elif session:
         console.print(
             f"[bold green]Generating single-session HTML report for:[/bold green] [cyan]{session}[/cyan]"
         )
         sess_dir = session.parent if session.is_file() else session
         manifest = sess_dir / "session.json"
-        
+
         with open(manifest) as f:
             s_dict = json.load(f)
-        sess = Session.model_validate(s_dict)
+        Session.model_validate(s_dict)
 
         # Check or compute QA
         qa_results_file = sess_dir / "qa" / "results.json"
@@ -297,12 +325,18 @@ def report(
             mcap_name = Path(s_dict.get("mcap_path", "session.mcap")).name
             mcap_file = sess_dir / mcap_name
             if mcap_file.exists():
-                console.print(f"[bold cyan]Exporting Foxglove event annotations to:[/bold cyan] {mcap_file}")
+                console.print(
+                    f"[bold cyan]Exporting Foxglove event annotations to:[/bold cyan] {mcap_file}"
+                )
                 export_foxglove_annotations(mcap_file, qa_results, session_verdict=verdict)
-                console.print("[bold green]✓ MCAP annotated with /qa/events and /qa/logs channels.[/bold green]")
+                console.print(
+                    "[bold green]✓ MCAP annotated with /qa/events and /qa/logs channels.[/bold green]"
+                )
 
         out_html = generate_session_report(session, output_html=output)
-        console.print(f"[bold green]✓ Single-session HTML report generated:[/bold green] [cyan]{out_html}[/cyan]")
+        console.print(
+            f"[bold green]✓ Single-session HTML report generated:[/bold green] [cyan]{out_html}[/cyan]"
+        )
     else:
         console.print("[bold red]Error: Provide a session path or --batch directory.[/bold red]")
         raise typer.Exit(code=1)
@@ -357,10 +391,12 @@ def sync_imu_cam(
 ) -> None:
     """Estimate IMU-camera temporal offset via visual angular velocity and gyroscope cross-correlation."""
     import json
+
     import cv2
     import numpy as np
     from foxglove_schemas_protobuf import CompressedImage_pb2
     from mcap.reader import make_reader
+
     from rigsim.sync.imu_cam import ImuCameraSyncEstimator
 
     console.print(
@@ -385,7 +421,9 @@ def sync_imu_cam(
     with open(mcap_path, "rb") as f:
         reader = make_reader(f)
         for schema, channel, message in reader.iter_messages():
-            if cam_topic_pattern in channel.topic or (camera == "cam_wrist" and "cam0/image_compressed" in channel.topic):
+            if cam_topic_pattern in channel.topic or (
+                camera == "cam_wrist" and "cam0/image_compressed" in channel.topic
+            ):
                 pb = CompressedImage_pb2.CompressedImage()
                 pb.ParseFromString(message.data)
                 bgr = cv2.imdecode(np.frombuffer(pb.data, dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -421,9 +459,135 @@ def sync_imu_cam(
     table.add_column("Value", style="bold green")
     table.add_row("Estimated Hardware Offset", f"{res.offset_ms:+.3f} ms")
     table.add_row("Cross-Correlation Peak (r)", f"{res.correlation_peak:.3f}")
-    table.add_row("SLA Verdict (limit < 5.0 ms)", "[bold green]PASS[/bold green]" if abs(res.offset_ms) <= 5.0 else "[bold red]FAIL[/bold red]")
+    table.add_row(
+        "SLA Verdict (limit < 5.0 ms)",
+        "[bold green]PASS[/bold green]"
+        if abs(res.offset_ms) <= 5.0
+        else "[bold red]FAIL[/bold red]",
+    )
     table.add_row("Explanation", res.explanation)
     console.print(table)
+
+
+@sync_app.command("euroc-sweep")
+def sync_euroc_sweep(
+    dataset_path: Path = typer.Argument(
+        ..., help="Path to EuRoC dataset directory (e.g. data/euroc/MH_01_easy)"
+    ),
+    output_dir: Path = typer.Option(
+        Path("data/euroc_sweep"),
+        "--output-dir",
+        "-o",
+        help="Temporary directory for sweep MCAPs",
+    ),
+    max_frames: int = typer.Option(
+        120, "--max-frames", "-m", help="Max camera frames to process for each offset step"
+    ),
+) -> None:
+    """Run systematic IMU-camera temporal offset recovery sweep on EuRoC."""
+    from rigsim.eval.euroc_eval import EuRoCEvaluator
+
+    evaluator = EuRoCEvaluator(console)
+    try:
+        evaluator.run_offset_sweep(
+            euroc_dir=dataset_path,
+            tmp_base=output_dir,
+            max_frames=max_frames,
+        )
+    except FileNotFoundError as e:
+        console.print(str(e))
+        raise typer.Exit(1)
+
+
+@ingest_app.command("euroc")
+def ingest_euroc(
+    dataset_path: Path = typer.Argument(
+        ..., help="Path to EuRoC sequence folder (e.g. data/euroc/MH_01_easy)"
+    ),
+    output_dir: Path | None = typer.Option(
+        None,
+        "--output-dir",
+        "-o",
+        help="Output directory for session manifest and MCAP",
+    ),
+    faults: Path | None = typer.Option(
+        None,
+        "--faults",
+        "-f",
+        help="Optional fault scenario YAML to inject into real data",
+    ),
+    imu_shift_ms: float = typer.Option(
+        0.0,
+        "--imu-shift-ms",
+        help="Artificially shift IMU timestamps by delta ms",
+    ),
+    max_frames: int | None = typer.Option(
+        None,
+        "--max-frames",
+        "-m",
+        help="Limit camera frames for quick testing",
+    ),
+    run_qa: bool = typer.Option(
+        True,
+        "--qa/--no-qa",
+        help="Automatically run QA engine on ingested session",
+    ),
+    report: bool = typer.Option(
+        False,
+        "--report/--no-report",
+        help="Generate standalone HTML QA report",
+    ),
+) -> None:
+    """Ingest EuRoC MAV ASL dataset into RigSim Session and MCAP."""
+    import yaml
+
+    from rigsim.config.faults import FaultScenarioConfig
+    from rigsim.ingest.euroc import EuRoCIngestAdapter
+    from rigsim.qa.engine import QAEngine
+
+    out_dir = output_dir or Path(f"data/euroc_ingested/{dataset_path.name}")
+
+    fault_cfg = None
+    if faults and faults.exists():
+        with open(faults) as f:
+            fault_cfg = FaultScenarioConfig.model_validate(yaml.safe_load(f))
+
+    console.print(f"[bold green]Ingesting EuRoC sequence:[/bold green] [cyan]{dataset_path}[/cyan]")
+    console.print(f"Destination: [cyan]{out_dir}[/cyan]")
+
+    try:
+        adapter = EuRoCIngestAdapter(
+            euroc_dir=dataset_path,
+            output_dir=out_dir,
+            fault_config=fault_cfg,
+            imu_time_shift_ms=imu_shift_ms,
+            max_camera_frames=max_frames,
+        )
+        session = adapter.ingest()
+    except FileNotFoundError as e:
+        console.print(str(e))
+        raise typer.Exit(1)
+
+    console.print(
+        f"[bold green]✓ Ingest complete![/bold green] Session ID: [cyan]{session.session_id}[/cyan]"
+    )
+    console.print(f"MCAP written to: [cyan]{session.mcap_path}[/cyan]")
+
+    if run_qa:
+        console.print("[bold cyan]Running automated QA engine...[/bold cyan]")
+        qa_engine = QAEngine()
+        verdict = qa_engine.process_session(out_dir)
+        console.print(
+            f"Overall Verdict: [bold]{verdict.overall_verdict.value.upper()}[/bold] | "
+            f"Usable Yield: [bold green]{verdict.usable_percentage:.1f}%[/bold green]"
+        )
+
+    if report:
+        from rigsim.report.session_report import generate_session_report
+
+        rep_path = out_dir / "qa_report.html"
+        generate_session_report(out_dir, rep_path)
+        console.print(f"Report generated at: [cyan]{rep_path}[/cyan]")
 
 
 @app.command()

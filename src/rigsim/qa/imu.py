@@ -10,7 +10,7 @@ STANDARD_GRAVITY = 9.80665
 
 def detect_stationary_mask(
     accel_readings: np.ndarray,  # (N, 3) in m/s^2
-    gyro_readings: np.ndarray,   # (N, 3) in rad/s
+    gyro_readings: np.ndarray,  # (N, 3) in rad/s
     gyro_thresh_rad_s: float = 0.08,
     accel_std_thresh: float = 0.15,
     window_samples: int = 50,  # ~250 ms at 200 Hz
@@ -22,7 +22,7 @@ def detect_stationary_mask(
     # Rolling std of accel norm
     accel_norm = np.linalg.norm(accel_readings, axis=1)
     if len(accel_norm) < window_samples:
-        return is_quiet_gyro
+        return np.asarray(is_quiet_gyro, dtype=bool)
 
     # Fast rolling standard deviation via convolution
     kernel = np.ones(window_samples) / window_samples
@@ -31,7 +31,7 @@ def detect_stationary_mask(
     rolling_std = np.sqrt(np.maximum(0.0, rolling_sq_mean - rolling_mean**2))
 
     is_quiet_accel = rolling_std < accel_std_thresh
-    return is_quiet_gyro & is_quiet_accel
+    return np.asarray(is_quiet_gyro & is_quiet_accel, dtype=bool)
 
 
 def check_m1_imu_gravity(
@@ -90,7 +90,11 @@ def check_m1_imu_gravity(
         metric_name="gravity_error_m_s2",
         value=g_err,
         threshold=thresholds.max_gravity_error_m_s2,
-        evidence={"measured_gravity": mean_g, "expected_gravity": STANDARD_GRAVITY, "static_samples": len(static_accel)},
+        evidence={
+            "measured_gravity": mean_g,
+            "expected_gravity": STANDARD_GRAVITY,
+            "static_samples": len(static_accel),
+        },
         explanation=explanation,
     )
 
@@ -232,7 +236,9 @@ def check_m3_imu_bias_jump(
         metric_name="max_gyro_bias_jump",
         value=max_gyro_jump,
         threshold=max_jump_gyro_rad_s,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
         evidence={"max_gyro_jump": max_gyro_jump, "max_accel_jump": max_accel_jump},
         explanation=explanation,
     )
@@ -243,7 +249,7 @@ def check_m4_imu_gravity_direction(
     accel_readings: list[list[float]] | np.ndarray,
     gyro_readings: list[list[float]] | np.ndarray,
     timestamps_ns: list[int],
-    expected_upright_vector: list[float] | np.ndarray = (0.0, 0.0, 1.0),  # +Z reaction when resting
+    expected_upright_vector: list[float] | tuple[float, float, float] | np.ndarray = (0.0, 0.0, 1.0),  # +Z reaction when resting
     max_angle_deg: float = 25.0,
 ) -> QAResult:
     """M4: Gravity vector alignment check (detects inverted mounts or axis flip faults)."""
@@ -303,4 +309,3 @@ def check_m4_imu_gravity_direction(
         evidence={"measured_vector": u_meas.tolist(), "angle_error_deg": angle_deg},
         explanation=explanation,
     )
-

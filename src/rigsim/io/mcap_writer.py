@@ -207,8 +207,11 @@ class RigSimMCAPWriter:
         topic = f"/{stream_id}/image_compressed"
         channel_id = self.channels[topic]
 
-        # Convert RGB to BGR for OpenCV encoder
-        bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+        # Convert RGB or Grayscale to BGR for OpenCV encoder
+        if image_rgb.ndim == 2:
+            bgr = cv2.cvtColor(image_rgb, cv2.COLOR_GRAY2BGR)
+        else:
+            bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
         if encoding.lower() == "png":
             _, enc_buf = cv2.imencode(".png", bgr)
             fmt = "png"

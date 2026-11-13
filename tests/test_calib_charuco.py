@@ -79,4 +79,3 @@ def test_charuco_stereo_calibration() -> None:
     assert stereo_res.R.shape == (3, 3)
     assert stereo_res.T.shape == (3, 1)
     assert stereo_res.num_stereo_pairs == len(left_views)
-

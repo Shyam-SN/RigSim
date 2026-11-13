@@ -49,7 +49,9 @@ def export_foxglove_annotations(
 
             # 1. Map and copy existing schemas
             schema_map: dict[int, int] = {}
-            for schema_id, schema in reader.get_summary().schemas.items():
+            summary = reader.get_summary()
+            raw_schemas = summary.schemas if summary else {}
+            for schema_id, schema in raw_schemas.items():
                 new_schema_id = writer.register_schema(
                     name=schema.name,
                     encoding=schema.encoding,
@@ -59,7 +61,8 @@ def export_foxglove_annotations(
 
             # 2. Map and copy existing channels
             channel_map: dict[int, int] = {}
-            for channel_id, channel in reader.get_summary().channels.items():
+            raw_channels = summary.channels if summary else {}
+            for channel_id, channel in raw_channels.items():
                 new_schema_id = schema_map.get(channel.schema_id, 0)
                 new_channel_id = writer.register_channel(
                     topic=channel.topic,
@@ -98,7 +101,7 @@ def export_foxglove_annotations(
             # 5. Copy all existing messages
             first_ts = None
             last_ts = None
-            for schema, channel, message in reader.iter_messages():
+            for _, channel, message in reader.iter_messages():
                 if first_ts is None or message.publish_time < first_ts:
                     first_ts = message.publish_time
                 if last_ts is None or message.publish_time > last_ts:
@@ -113,7 +116,7 @@ def export_foxglove_annotations(
                 )
 
             session_t_start = first_ts or 1_700_000_000_000_000_000
-            session_t_end = last_ts or (session_t_start + 1_000_000_000)
+            last_ts or (session_t_start + 1_000_000_000)
 
             # 6. Write QA flagged window events and logs
             for r in qa_results:
@@ -128,16 +131,12 @@ def export_foxglove_annotations(
 
                 if r.flagged_windows:
                     for w in r.flagged_windows:
-                        w_start = (
-                            w.t_start_ns
-                            if hasattr(w, "t_start_ns")
-                            else w.get("t_start_ns", session_t_start)
-                        )
-                        w_end = (
-                            w.t_end_ns
-                            if hasattr(w, "t_end_ns")
-                            else w.get("t_end_ns", w_start + 50_000_000)
-                        )
+                        if isinstance(w, dict):
+                            w_start = w.get("t_start_ns", session_t_start)
+                            w_end = w.get("t_end_ns", w_start + 50_000_000)
+                        else:
+                            w_start = w.t_start_ns
+                            w_end = w.t_end_ns
 
                         # Write Event
                         event = Event_pb2.Event()

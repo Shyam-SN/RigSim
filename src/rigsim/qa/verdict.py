@@ -36,7 +36,9 @@ class VerdictEvaluator:
                         bad_intervals.append((win.t_start_ns, win.t_end_ns))
                 else:
                     has_warn = True
-                    summary_rules.append(f"WARN (non-critical): [{res.stream_id}] {res.explanation}")
+                    summary_rules.append(
+                        f"WARN (non-critical): [{res.stream_id}] {res.explanation}"
+                    )
             elif res.verdict == QAVerdict.WARN:
                 has_warn = True
                 summary_rules.append(f"WARN: [{res.stream_id}] {res.explanation}")
@@ -48,7 +50,9 @@ class VerdictEvaluator:
             overall_verdict = QAVerdict.WARN
         else:
             overall_verdict = QAVerdict.PASS
-            summary_rules.append("PASS: All critical and operational data quality thresholds satisfied.")
+            summary_rules.append(
+                "PASS: All critical and operational data quality thresholds satisfied."
+            )
 
         # Compute usable time ranges by subtracting bad intervals from [t_start_ns, t_end_ns]
         usable_ranges = self._compute_usable_ranges(t_start_ns, t_end_ns, bad_intervals)
@@ -100,4 +104,3 @@ class VerdictEvaluator:
             usable.append(TimeWindow(t_start_ns=curr, t_end_ns=t_end_ns))
 
         return usable
-

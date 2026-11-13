@@ -23,4 +23,3 @@ __all__ = [
     "check_c3_stereo_consistency",
     "check_c4_calibration_staleness",
 ]
-

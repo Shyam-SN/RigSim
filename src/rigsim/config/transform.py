@@ -70,6 +70,32 @@ class Transform(BaseModel):
         )
 
     @classmethod
+    def from_matrix(cls, matrix: list[list[float]] | np.ndarray) -> "Transform":
+        """Construct Transform from a 4x4 homogeneous transformation matrix."""
+        from scipy.spatial.transform import Rotation
+
+        mat = np.array(matrix, dtype=np.float64)
+        if mat.shape != (4, 4):
+            raise ValueError(f"Matrix must have shape (4, 4), got {mat.shape}")
+
+        R = mat[:3, :3]
+        t = mat[:3, 3]
+
+        # Extract unit quaternion [x, y, z, w]
+        rot = Rotation.from_matrix(R)
+        qx, qy, qz, qw = rot.as_quat()
+
+        # Enforce exact bottom row [0, 0, 0, 1] for strict validation
+        mat_clean = mat.copy()
+        mat_clean[3, :] = [0.0, 0.0, 0.0, 1.0]
+
+        return cls(
+            matrix=mat_clean.tolist(),
+            translation=(float(t[0]), float(t[1]), float(t[2])),
+            rotation_xyzw=(float(qx), float(qy), float(qz), float(qw)),
+        )
+
+    @classmethod
     def identity(cls) -> "Transform":
         return cls(
             matrix=[

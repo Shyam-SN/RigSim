@@ -1,6 +1,6 @@
 """Unit tests for geometric calibration checks: C1, C2, C3, and C4."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import cv2
 import numpy as np
@@ -79,11 +79,14 @@ def test_c3_stereo_consistency_epipolar(default_thresholds: CalibrationThreshold
 
     # Fundamental matrix for pure horizontal translation: F = [0 0 0; 0 0 -1; 0 1 0]
     # x_r^T F x_l = 0 when y_r == y_l
-    F = np.array([
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, -1.0],
-        [0.0, 1.0, 0.0],
-    ], dtype=np.float64)
+    F = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
 
     res_clean = check_c3_stereo_consistency(
         "pair0", left_frames, right_frames_clean, ts, F, default_thresholds, calib
@@ -104,17 +107,20 @@ def test_c3_stereo_consistency_epipolar(default_thresholds: CalibrationThreshold
 
 
 def test_c4_calibration_staleness() -> None:
-    now = datetime(2026, 11, 13, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
 
     # 3 days old (fresh)
     calib_fresh = now - timedelta(days=3)
-    res_fresh = check_c4_calibration_staleness("cam0", calib_fresh, session_date=now, max_age_days=7.0)
+    res_fresh = check_c4_calibration_staleness(
+        "cam0", calib_fresh, session_date=now, max_age_days=7.0
+    )
     assert res_fresh.verdict == QAVerdict.PASS
     assert res_fresh.value <= 3.1
 
     # 14 days old (stale)
     calib_stale = now - timedelta(days=14)
-    res_stale = check_c4_calibration_staleness("cam0", calib_stale, session_date=now, max_age_days=7.0)
+    res_stale = check_c4_calibration_staleness(
+        "cam0", calib_stale, session_date=now, max_age_days=7.0
+    )
     assert res_stale.verdict == QAVerdict.WARN
     assert res_stale.value >= 13.9
-

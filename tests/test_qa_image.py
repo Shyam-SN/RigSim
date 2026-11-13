@@ -78,13 +78,17 @@ def test_i2_exposure_variations(
     assert check_i2_exposure("cam0", frames, ts, default_thresholds).verdict == QAVerdict.PASS
 
     # Underexposure
-    under_inj = ExposureFaultInjector("cam0", ts[0], ts[-1], severity=1.0, mode="underexposure", gain=0.05)
+    under_inj = ExposureFaultInjector(
+        "cam0", ts[0], ts[-1], severity=1.0, mode="underexposure", gain=0.05
+    )
     under_frames = [under_inj.modify_image(f, t) for f, t in zip(frames, ts, strict=False)]
     res_under = check_i2_exposure("cam0", under_frames, ts, default_thresholds)
     assert res_under.verdict == QAVerdict.FAIL
 
     # Overexposure
-    over_inj = ExposureFaultInjector("cam0", ts[0], ts[-1], severity=1.0, mode="overexposure", gain=4.0)
+    over_inj = ExposureFaultInjector(
+        "cam0", ts[0], ts[-1], severity=1.0, mode="overexposure", gain=4.0
+    )
     over_frames = [over_inj.modify_image(f, t) for f, t in zip(frames, ts, strict=False)]
     res_over = check_i2_exposure("cam0", over_frames, ts, default_thresholds)
     assert res_over.verdict == QAVerdict.FAIL

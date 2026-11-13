@@ -449,3 +449,126 @@ This document serves as a living engineering journal and technical interview pre
 > *"In robotics, recording a 2-hour manipulation or autonomous driving session is expensive—requiring real hardware, human operators, and battery cycles.  
 > If an operator accidentally shadows a camera for 3 seconds or a single USB latency spike drops 2 frames at minute 45, a naive binary filter discards the entire 2-hour recording, throwing away valuable training data.  
 > Instead, our engine performs interval arithmetic: it records the exact nanosecond defect intervals $[t_{\text{start}}, t_{\text{end}}]$, slices them out, and validates the remaining continuous usable episodes. The session is tagged with its Data Yield (e.g. 97.4% usable), and only the validated sub-episodes are exported for policy training. This preserves collection ROI while ensuring zero corrupt data enters training."*
+
+
+---
+
+## Milestone M6: Real-World Ingest (EuRoC MAV) & Cross-Domain Validation
+
+### 1. High-Level Overview & Strategic Role Alignment
+In Milestone M6, we expanded RigSim beyond purely synthetic simulation to ingest real-world industry benchmark datasets—specifically the **ETH Zürich EuRoC MAV (ASL)** dataset.
+
+As a **Strategic Projects Lead (Robotics)**, client engagements routinely involve ingesting legacy robot logs, third-party fleet recordings, or benchmark datasets captured across heterogeneous hardware. Clients do not just need a simulator; they need an **agnostic data pipeline** capable of taking arbitrary raw recordings, converting them into standardized MCAP formats, injecting controlled edge-case faults onto real physical camera images, and verifying sub-millisecond hardware synchronization and calibration consistency.
+
+---
+
+### 2. Deep Technical Breakdown
+
+#### A. ASL / EuRoC Dataset Architecture & Calibration Model
+The EuRoC dataset captures synchronized stereo imagery and high-rate inertial dynamics from an AscTec Firefly hexacopter:
+- **Stereo Cameras (`cam0`, `cam1`):** Aptina MT9M034 global-shutter monochrome sensors operating at 20 Hz (752×480).
+  - Optics: Pinhole camera model with Radial-Tangential distortion $[k_1, k_2, p_1, p_2]$.
+  - Extrinsics: Given as $T_{BS}$ (body-to-sensor 4×4 homogeneous transform). In ASL notation, $p_B = T_{BS} p_S$.
+  - Stereo Baseline: $T_{\text{left\_right}} = T_{BS0}^{-1} \cdot T_{BS1}$. For EuRoC, this yields a baseline $b \approx 11.0\text{ cm}$.
+- **IMU (`imu0`):** Analog Devices ADIS16448 MEMS IMU operating at 200 Hz with 3-axis accelerometer and 3-axis gyroscope.
+- **Hardware Synchronization:** Visual exposure start and IMU sampling are hardware-triggered via an FPGA microcontroller. Exposure pulses trigger the sensor readout, guaranteeing inter-camera sync $< 0.1\text{ ms}$ and IMU-camera temporal offset $\tau \approx 0.0\text{ ms}$.
+
+#### B. Ingestion Pipeline & Chronological Interleaving
+Converting folder-based image sequences (`<timestamp>.png`) and CSV sensor logs into high-throughput MCAP requires strict time-domain interleaving:
+1. **Timestamp Sorting:** EuRoC timestamps are raw 64-bit nanosecond integers since epoch (`1403636579763555584`). We parse and merge all camera and IMU records into a unified chronological event stream.
+2. **Channel Multiplexing:** We stream records into MCAP under Foxglove protobuf schemas (`/cam0/image_compressed`, `/cam0/calibration`, `/cam1/image_compressed`, `/cam1/calibration`, `/imu0/data`, `/tf`).
+3. **Transport Delay Modeling:** In physical capture, host arrival time (`log_time`) lags sensor exposure (`publish_time`) due to USB/PCIe/Ethernet DMA buffers. Our adapter models a nominal 1.5 ms transport delay with 0.1 ms jitter, establishing realistic dual-timestamp logging.
+
+#### C. Fault Injection on Real Sensor Imagery
+A key requirement for data QA evaluation is measuring detection sensitivity on **real images** (featuring real lens flare, dynamic range clipping, and scene motion) rather than synthetic renders alone:
+- **Image Content Faults:** Motion blur kernels (box/Gaussian PSF), underexposure/overexposure scaling, black rectangular occlusion patches, and corrupted scanlines are injected directly onto decoded image frames before JPEG recompression.
+- **Timing & Transport Faults:** Frame drops, FPS jitter, and IMU dropouts are applied by conditionally dropping samples or shifting timestamps during ingest.
+- **Ground Truth Export:** Ground-truth `FaultLabel` intervals are written to `labels.json` alongside `session.json`, allowing automated precision/recall evaluation.
+
+---
+
+### 3. Engineering Retrospective: Mistakes Made, Discoveries & Technical Fixes
+
+#### Mistake 1: Continuous-Slope False Snap in IMU-Cam Cross-Correlation MAP Prior
+- **The Mistake:** In Milestone M4, to disambiguate cyclic autocorrelation side-lobes on repetitive trajectory sine waves, we introduced a Maximum A Posteriori (MAP) prior:
+  ```python
+  candidates = np.where(corr_slice >= (global_max_val - 0.03))[0]
+  peak_idx = int(candidates[np.argmin(np.abs(lags[candidates]))])
+  ```
+  The intention was: if two distant periodic peaks have nearly identical correlation (within 3%), prefer the one closest to 0 ms lag.
+- **How Found:** In our offset recovery sweep test (`test_euroc_imu_cam_offset_sweep`), we systematically injected an offset of $-15.0\text{ ms}$. The estimator returned $+0.5\text{ ms}$ ($14.5\text{ ms}$ error), completely failing to detect the shift!
+- **Root Cause Analysis:** On smooth, low-frequency trajectories ($\approx 0.5\text{ Hz}$), the signal autocorrelation $R(\tau) = \cos(2\pi f \tau)$ changes very gradually:
+  $$\tau = 15\text{ ms} \implies 2\pi (0.5)(0.015) = 0.047\text{ rad} \implies R(15\text{ ms}) = \cos(0.047) = 0.9989$$
+  Because $0.9989$ is within $0.001$ of $1.000$, the flat threshold `corr >= max - 0.03` selected *every continuous sample* along the shoulder of the main lobe between $-35\text{ ms}$ and $+35\text{ ms}$! `np.argmin(np.abs(lags))` then artificially snapped to 0 ms, destroying any valid offset under 30 ms!
+- **The Fix:** Replaced flat thresholding with `scipy.signal.find_peaks()`, which identifies *true local extrema* (where the discrete first derivative changes sign). Continuous samples on the main lobe slope are rejected because they have non-zero slopes. Only if multiple distinct local maxima separated by troughs compete within 3% is the MAP prior invoked:
+  ```python
+  peaks, _ = find_peaks(corr_slice)
+  if len(peaks) > 0:
+      max_val = float(np.max(corr_slice[peaks]))
+      competitive = [p for p in peaks if corr_slice[p] >= max_val - 0.03]
+      if len(competitive) > 1:
+          peak_idx = int(competitive[np.argmin(np.abs(lags[competitive]))])
+      else:
+          peak_idx = int(peaks[np.argmax(corr_slice[peaks])])
+  else:
+      peak_idx = int(np.argmax(corr_slice))
+  ```
+  Recovery error dropped to $< 0.5\text{ ms}$ across all test shifts $[-15, 0, +15]\text{ ms}$.
+
+#### Mistake 2: Rolling Window Boundary Truncation in Effective FPS Check (T2)
+- **The Mistake:** In `check_t2_effective_fps`, the rolling evaluation grid was calculated as:
+  ```python
+  eval_times = np.arange(0.0, total_time - window_duration_s + step_s, step_s)
+  ```
+- **How Found:** A clean 25-frame EuRoC ingest (1.25s duration) failed the QA check with:
+  `WARN: [cam0] Effective FPS dropped to 15.0 Hz (nominal 20.0 Hz)`.
+- **Root Cause Analysis:** For `total_time = 1.20s` and `window_duration_s = 1.0s`, `total_time - window + step = 0.20 + 0.50 = 0.70s`. This included $t = 0.5\text{s}$, evaluating the interval $[0.5\text{s}, 1.5\text{s}]$. But because the session ended at 1.20s, only 0.7s of recording existed in that window! Dividing 15 frames by a full 1.0s window produced an artificial 15.0 Hz calculation.
+- **The Fix:** Constrained evaluation windows strictly to complete non-truncated windows:
+  ```python
+  max_eval_t = total_time - window_duration_s
+  eval_times = np.arange(0.0, max_eval_t + 1e-6, step_s)
+  if len(eval_times) == 0:
+      eval_times = np.array([0.0])
+  ```
+  Clean recordings now correctly measure 20.0 Hz effective FPS with zero false positives.
+
+#### Mistake 3: Zero-Variance Synthetic Scanlines Triggering False Corruption & Frozen Frame QA
+- **The Mistake:** In synthetic mock tests, camera frames were generated by drawing horizontal grid lines across constant background pixels:
+  `for gy in range(50, h, 60): cv2.line(img0, (0, gy), (w, gy), 40, 2)`
+- **How Found:** `check_i5_corruption` flagged: `FAIL: Detected 2 corrupted / stripe artifact frames`. Furthermore, initial stationary frames flagged `check_i4_frozen_frames`.
+- **Root Cause Analysis:** In real digital cameras, macroblock / scanline transmission drops fill rows with solid color, resulting in an abrupt row mean shift combined with **zero intra-row standard deviation** across adjacent rows. Because our test image drew solid constant horizontal rows, `row_stds[r]` was exactly 0.0, which perfectly mimicked a corrupted network packet! Additionally, stationary camera frames without sensor read noise had $\Delta I = 0$, mimicking a frozen GPU frame buffer.
+- **The Fix:**
+  1. Replaced constant scanlines with continuous 2D spatial gradients ($120 + 30\sin(x/40) + 20\cos(y/35)$) plus scattered 2D circles.
+  2. Modeled realistic sensor shot and read noise ($\sigma = 1.0\text{ DN}$). In real sensors, quantum shot noise ensures that even perfectly static physical scenes produce $\Delta I > 0$ between frames, accurately passing the frozen frame check.
+
+---
+
+### 4. Technical Interview Preparation (Q&A for Strategic Projects Lead)
+
+#### Q1: "How do you ingest external, legacy, or client-provided datasets into your unified QA infrastructure?"
+> **Answer:**
+> *"In a client-facing robotics role, data comes in all shapes: ASL folders, ROS1/ROS2 bags, flat MP4s, or proprietary CSVs. We treat ingest as a standardized schema adapter layer.
+>
+> In RigSim, our `EuRoCIngestAdapter` maps external formats into our internal Pydantic data model and Foxglove-compliant MCAP. It parses sensor intrinsics and extrinsics ($T_{BS}$), establishes dual-timestamp logging (`device_time_ns` from hardware trigger and `host_time_ns` modeling transport latency), and streams messages chronologically.
+>
+> Because the output is a standard `Session` manifest and MCAP, the exact same downstream automated QA engine, calibration checkers, and HTML reporting run identically across simulated, EuRoC, and real smartphone data. This decoupling is essential for fleet scalability."*
+
+#### Q2: "Why is hardware triggering critical in multi-camera + IMU rigs, and how does your QA engine verify it on real data?"
+> **Answer:**
+> *"Software triggering (via USB or network packets) suffers from OS scheduler jitter, USB endpoint queuing, and thread preemption, typically introducing 5 to 30 ms of variable temporal drift. For Visual-Inertial Odometry (VIO) or NeRF/3DGS mapping at 1 m/s, a 20 ms offset causes a 2 cm tracking discrepancy and epipolar geometry divergence.
+>
+> Hardware triggering uses an FPGA or dedicated microcontroller to generate a shared TTL pulse to the camera global-shutter sensor (exposure start) and sample the IMU synchronously.
+>
+> Our QA engine verifies this via two checks:
+> 1. **`T6_INTER_CAM_SYNC`**: Measures inter-frame exposure timestamp delta between stereo cameras (limit $< 2.0\text{ ms}$). On EuRoC hardware-synced data, this is measured at $0.00\text{ ms}$.
+> 2. **`T7_IMU_CAM_OFFSET`**: Cross-correlates visual angular velocity (via Lucas-Kanade optical flow and Polar SVD homography decomposition) with gyroscope norm $\|\boldsymbol{\omega}\|_{\text{gyro}}$. On clean EuRoC, it confirms $\tau < 0.5\text{ ms}$, and our offset recovery sweep proves we can detect and measure intentional temporal shifts with $< 1.0\text{ ms}$ error."*
+
+#### Q3: "How do you benchmark and validate an automated QA system to prove to clients that it reliably catches bad data?"
+> **Answer:**
+> *"Never claim a QA check works without measuring precision and recall on ground-truth labeled faults. In RigSim, we built a dual-mode benchmarking engine:
+>
+> First, on clean real-world data (like EuRoC), we measure the **False Positive Rate (FPR)**: the pipeline must achieve $> 98\%$ data yield and produce zero false critical failures.
+>
+> Second, we inject controlled, labeled synthetic faults directly onto **real images and sensor streams** (e.g. frame bursts, clock jitter, motion blur, underexposure, and IMU dropouts). We then compare the QA engine's flagged time windows against the ground-truth `labels.json`.
+>
+> In our EuRoC benchmark suite, the engine demonstrated 100% detection recall across burst frame drops, motion blur, and exposure faults on real sensor imagery. This gives clients empirical confidence that bad data will never slip into training models undetected."*

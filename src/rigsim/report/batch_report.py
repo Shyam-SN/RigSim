@@ -8,10 +8,9 @@ import jinja2
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from rigsim.config.qa import QAVerdict, SessionVerdict
+from rigsim.config.qa import SessionVerdict
 from rigsim.config.session import Session
 from rigsim.qa.engine import QAEngine
-
 
 BATCH_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -49,7 +48,7 @@ BATCH_TEMPLATE = """<!DOCTYPE html>
     }
     .header-title h1 { font-size: 26px; font-weight: 700; color: var(--text); }
     .header-title .subtitle { color: var(--text-muted); font-size: 14px; margin-top: 4px; }
-    
+
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -64,7 +63,7 @@ BATCH_TEMPLATE = """<!DOCTYPE html>
     }
     .stat-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; font-weight: 600; }
     .stat-val { font-size: 24px; font-weight: 700; color: var(--text); margin-top: 4px; }
-    
+
     .section {
       background: var(--card-bg);
       border: 1px solid var(--border);
@@ -83,7 +82,7 @@ BATCH_TEMPLATE = """<!DOCTYPE html>
       border-bottom: 1px solid var(--border);
       padding-bottom: 10px;
     }
-    
+
     .chart-container {
       margin: 16px 0;
       border-radius: 8px;
@@ -91,7 +90,7 @@ BATCH_TEMPLATE = """<!DOCTYPE html>
       background: #111827;
       border: 1px solid var(--border);
     }
-    
+
     table {
       width: 100%;
       border-collapse: collapse;
@@ -111,7 +110,7 @@ BATCH_TEMPLATE = """<!DOCTYPE html>
       font-size: 11px;
     }
     tr:hover { background: rgba(51, 65, 85, 0.3); }
-    
+
     .status-pill {
       display: inline-block;
       padding: 2px 8px;
@@ -122,7 +121,7 @@ BATCH_TEMPLATE = """<!DOCTYPE html>
     .status-PASS { background: rgba(16, 185, 129, 0.2); color: var(--pass); }
     .status-WARN { background: rgba(245, 158, 11, 0.2); color: var(--warn); }
     .status-FAIL { background: rgba(239, 68, 68, 0.2); color: var(--fail); }
-    
+
     a { color: var(--accent); text-decoration: none; font-weight: 600; }
     a:hover { text-decoration: underline; }
   </style>
@@ -134,7 +133,7 @@ BATCH_TEMPLATE = """<!DOCTYPE html>
         <h1>RigSim Fleet QA Operations Summary</h1>
         <div class="subtitle">Multi-Session Fleet Batch Analysis | Target Directory: <strong>{{ batch_dir }}</strong></div>
       </div>
-      
+
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-label">Total Sessions</div>
@@ -311,9 +310,7 @@ def generate_batch_report(
                 v = r.get("verdict", "")
                 if v == "FAIL":
                     failure_counts[cid] = failure_counts.get(cid, 0) + 1
-                    rig_stats[r_name]["defects"][cid] = (
-                        rig_stats[r_name]["defects"].get(cid, 0) + 1
-                    )
+                    rig_stats[r_name]["defects"][cid] = rig_stats[r_name]["defects"].get(cid, 0) + 1
                     if primary_issue == "None (Clean)":
                         primary_issue = f"{cid}: {r.get('explanation', '')[:60]}..."
 
@@ -329,7 +326,9 @@ def generate_batch_report(
             session_rows.append(
                 {
                     "session_id": sess.session_id,
-                    "source": sess.source.value if hasattr(sess.source, "value") else str(sess.source),
+                    "source": sess.source.value
+                    if hasattr(sess.source, "value")
+                    else str(sess.source),
                     "rig_name": r_name,
                     "operator": sess.operator or "automation",
                     "verdict": v_str,

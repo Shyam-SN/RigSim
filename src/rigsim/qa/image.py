@@ -2,6 +2,7 @@
 
 import cv2
 import numpy as np
+
 from rigsim.config.qa import ImageThresholds, QAResult
 from rigsim.config.types import QAVerdict
 
@@ -31,7 +32,9 @@ def check_i1_blur(
             explanation="Insufficient frames for blur analysis.",
         )
 
-    variances = np.array([compute_frame_laplacian_variance(img) for img in frames_rgb], dtype=np.float64)
+    variances = np.array(
+        [compute_frame_laplacian_variance(img) for img in frames_rgb], dtype=np.float64
+    )
 
     # Compute rolling median (window = 15 frames or len/3)
     k = min(15, len(variances))
@@ -42,9 +45,7 @@ def check_i1_blur(
     # Pad variances for rolling median
     pad_w = k // 2
     padded = np.pad(variances, pad_w, mode="edge")
-    rolling_medians = np.array([
-        np.median(padded[i : i + k]) for i in range(len(variances))
-    ])
+    rolling_medians = np.array([np.median(padded[i : i + k]) for i in range(len(variances))])
     # Avoid zero division
     rolling_medians = np.maximum(rolling_medians, 1.0)
     normalized_ratios = variances / rolling_medians
@@ -71,7 +72,9 @@ def check_i1_blur(
         metric_name="min_normalized_blur_ratio",
         value=min_ratio,
         threshold=thresholds.min_normalized_blur_ratio,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
         evidence={"min_ratio": min_ratio, "flagged_count": len(flagged_indices)},
         explanation=explanation,
     )
@@ -114,7 +117,9 @@ def check_i2_exposure(
             or mean_b > thresholds.max_mean_brightness
             or clip_ratio > thresholds.max_clipping_ratio
         ):
-            flagged_windows.append({"t_start_ns": timestamps_ns[idx], "t_end_ns": timestamps_ns[idx]})
+            flagged_windows.append(
+                {"t_start_ns": timestamps_ns[idx], "t_end_ns": timestamps_ns[idx]}
+            )
 
     min_b = float(np.min(mean_brightnesses))
     max_b = float(np.max(mean_brightnesses))
@@ -123,14 +128,18 @@ def check_i2_exposure(
 
     verdict = QAVerdict.PASS
     if bad_ratio > 0.05:
-        if min_b < thresholds.min_mean_brightness or max_b > thresholds.max_mean_brightness or max_clip > 0.35:
+        if (
+            min_b < thresholds.min_mean_brightness
+            or max_b > thresholds.max_mean_brightness
+            or max_clip > 0.35
+        ):
             verdict = QAVerdict.FAIL
-            explanation = f"FAIL: Severe exposure anomaly on {len(flagged_windows)} frames (mean brightness range [{min_b:.1f}, {max_b:.1f}], max clipping {max_clip*100:.1f}%)."
+            explanation = f"FAIL: Severe exposure anomaly on {len(flagged_windows)} frames (mean brightness range [{min_b:.1f}, {max_b:.1f}], max clipping {max_clip * 100:.1f}%)."
         else:
             verdict = QAVerdict.WARN
-            explanation = f"WARN: High contrast clipping on {len(flagged_windows)} frames (clipping {max_clip*100:.1f}% > limit {thresholds.max_clipping_ratio*100:.0f}%, mean brightness [{min_b:.1f}, {max_b:.1f}])."
+            explanation = f"WARN: High contrast clipping on {len(flagged_windows)} frames (clipping {max_clip * 100:.1f}% > limit {thresholds.max_clipping_ratio * 100:.0f}%, mean brightness [{min_b:.1f}, {max_b:.1f}])."
     else:
-        explanation = f"Balanced exposure: mean brightness range [{min_b:.1f}, {max_b:.1f}], max clipping {max_clip*100:.1f}%."
+        explanation = f"Balanced exposure: mean brightness range [{min_b:.1f}, {max_b:.1f}], max clipping {max_clip * 100:.1f}%."
 
     return QAResult(
         check_id="I2_EXPOSURE",
@@ -139,7 +148,9 @@ def check_i2_exposure(
         metric_name="mean_brightness",
         value=min_b if min_b < thresholds.min_mean_brightness else max_b,
         threshold=thresholds.min_mean_brightness,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
         evidence={"min_brightness": min_b, "max_brightness": max_b, "max_clipping_ratio": max_clip},
         explanation=explanation,
     )
@@ -165,14 +176,18 @@ def check_i3_occlusion(
         mean_grad = float(np.mean(grad_mag))
 
         # Occlusion: either extreme unfeatured flatness (>80% flat) or high flatness with collapsed edge density
-        if flat_fraction > 0.80 or (flat_fraction > thresholds.occlusion_min_uniform_ratio and mean_grad < 6.0):
-            flagged_windows.append({"t_start_ns": timestamps_ns[idx], "t_end_ns": timestamps_ns[idx]})
+        if flat_fraction > 0.80 or (
+            flat_fraction > thresholds.occlusion_min_uniform_ratio and mean_grad < 6.0
+        ):
+            flagged_windows.append(
+                {"t_start_ns": timestamps_ns[idx], "t_end_ns": timestamps_ns[idx]}
+            )
 
     bad_ratio = len(flagged_windows) / max(1, len(frames_rgb))
     verdict = QAVerdict.FAIL if bad_ratio > 0.05 else QAVerdict.PASS
 
     if verdict == QAVerdict.FAIL:
-        explanation = f"FAIL: Lens occlusion detected on {len(flagged_windows)} frames (uniform obstruction > {thresholds.occlusion_min_uniform_ratio*100:.0f}%)."
+        explanation = f"FAIL: Lens occlusion detected on {len(flagged_windows)} frames (uniform obstruction > {thresholds.occlusion_min_uniform_ratio * 100:.0f}%)."
     else:
         explanation = "Clear lens field-of-view verified (no persistent occlusions)."
 
@@ -183,7 +198,9 @@ def check_i3_occlusion(
         metric_name="occluded_frames_ratio",
         value=float(bad_ratio),
         threshold=0.05,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
         evidence={"occluded_frames_count": len(flagged_windows)},
         explanation=explanation,
     )
@@ -213,17 +230,23 @@ def check_i4_frozen_frames(
 
     for i in range(1, len(frames_rgb)):
         # Mean absolute pixel difference
-        diff = float(np.mean(np.abs(frames_rgb[i].astype(np.float32) - frames_rgb[i - 1].astype(np.float32))))
+        diff = float(
+            np.mean(np.abs(frames_rgb[i].astype(np.float32) - frames_rgb[i - 1].astype(np.float32)))
+        )
         if diff < 0.01:
             current_frozen_run += 1
             if current_frozen_run >= thresholds.max_frozen_frame_count:
-                flagged_windows.append({"t_start_ns": timestamps_ns[i - 1], "t_end_ns": timestamps_ns[i]})
+                flagged_windows.append(
+                    {"t_start_ns": timestamps_ns[i - 1], "t_end_ns": timestamps_ns[i]}
+                )
             if current_frozen_run > max_frozen_run:
                 max_frozen_run = current_frozen_run
         else:
             current_frozen_run = 0
 
-    verdict = QAVerdict.FAIL if max_frozen_run >= thresholds.max_frozen_frame_count else QAVerdict.PASS
+    verdict = (
+        QAVerdict.FAIL if max_frozen_run >= thresholds.max_frozen_frame_count else QAVerdict.PASS
+    )
     if verdict == QAVerdict.FAIL:
         explanation = f"FAIL: Frozen frames detected (run of {max_frozen_run + 1} identical images with advancing timestamps)."
     else:
@@ -236,7 +259,9 @@ def check_i4_frozen_frames(
         metric_name="max_frozen_run",
         value=float(max_frozen_run),
         threshold=float(thresholds.max_frozen_frame_count),
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
         evidence={"max_frozen_run": max_frozen_run},
         explanation=explanation,
     )
@@ -253,7 +278,9 @@ def check_i5_corruption(
     for idx, img in enumerate(frames_rgb):
         if img.size == 0 or np.mean(img) < 1.0 or np.mean(img) > 254.0:
             # Decode failure / all-black or all-white dropout
-            flagged_windows.append({"t_start_ns": timestamps_ns[idx], "t_end_ns": timestamps_ns[idx]})
+            flagged_windows.append(
+                {"t_start_ns": timestamps_ns[idx], "t_end_ns": timestamps_ns[idx]}
+            )
             continue
 
         # Horizontal transmission stripe / packet drop detection:
@@ -284,7 +311,9 @@ def check_i5_corruption(
                 stripe_detected = True
 
         if stripe_detected:
-            flagged_windows.append({"t_start_ns": timestamps_ns[idx], "t_end_ns": timestamps_ns[idx]})
+            flagged_windows.append(
+                {"t_start_ns": timestamps_ns[idx], "t_end_ns": timestamps_ns[idx]}
+            )
 
     corrupted_count = len(flagged_windows)
     verdict = QAVerdict.FAIL if corrupted_count > 0 else QAVerdict.PASS
@@ -301,7 +330,9 @@ def check_i5_corruption(
         metric_name="corrupted_count",
         value=float(corrupted_count),
         threshold=0.0,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
         evidence={"corrupted_count": corrupted_count},
         explanation=explanation,
     )

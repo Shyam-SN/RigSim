@@ -68,7 +68,7 @@ class CharucoCalibrator:
         if corners is None or ids is None or len(corners) < 4:
             return None, None, None, None
 
-        obj_points, img_points = self.board.matchImagePoints(corners, ids)
+        obj_points, img_points = self.board.matchImagePoints(corners, ids)  # type: ignore[call-overload]
         if obj_points is None or img_points is None:
             return None, None, None, None
 
@@ -94,7 +94,9 @@ class CharucoCalibrator:
                 total_corners += len(obj_pts)
 
         if len(all_obj_points) < 1:
-            raise ValueError("Insufficient ChArUco board detections across images (need at least 1 view with >= 6 corners).")
+            raise ValueError(
+                "Insufficient ChArUco board detections across images (need at least 1 view with >= 6 corners)."
+            )
 
         ret, K, dist, rvecs, tvecs = cv2.calibrateCamera(
             all_obj_points, all_img_points, image_size, None, None
@@ -129,7 +131,9 @@ class CharucoCalibrator:
     ) -> StereoCalibResult:
         """Perform stereo extrinsic calibration between synchronized left and right image pairs."""
         if len(left_images) != len(right_images):
-            raise ValueError(f"Mismatched stereo pair lengths: {len(left_images)} vs {len(right_images)}")
+            raise ValueError(
+                f"Mismatched stereo pair lengths: {len(left_images)} vs {len(right_images)}"
+            )
 
         obj_paired = []
         img_left_paired = []
@@ -139,7 +143,14 @@ class CharucoCalibrator:
             _, ids_l, obj_l, img_l = self.detect_board(im_l)
             _, ids_r, obj_r, img_r = self.detect_board(im_r)
 
-            if obj_l is not None and obj_r is not None and ids_l is not None and ids_r is not None:
+            if (
+                obj_l is not None
+                and obj_r is not None
+                and img_l is not None
+                and img_r is not None
+                and ids_l is not None
+                and ids_r is not None
+            ):
                 # Find common corner IDs detected in both left and right frames
                 common_ids = np.intersect1d(ids_l.flatten(), ids_r.flatten())
                 if len(common_ids) >= 6:
@@ -182,4 +193,3 @@ class CharucoCalibrator:
             F=F,
             num_stereo_pairs=len(obj_paired),
         )
-

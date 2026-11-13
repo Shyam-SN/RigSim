@@ -1,6 +1,7 @@
 """Timing and transport QA checks (T1-T6, T8)."""
 
 import numpy as np
+
 from rigsim.config.qa import QAResult, TimingThresholds
 from rigsim.config.types import QAVerdict
 
@@ -50,13 +51,17 @@ def check_t1_frame_drops(
     reasons = []
     if drop_ratio > thresholds.max_drop_ratio:
         verdict = QAVerdict.FAIL
-        reasons.append(f"drop ratio {drop_ratio*100:.2f}% exceeds limit {thresholds.max_drop_ratio*100:.1f}%")
+        reasons.append(
+            f"drop ratio {drop_ratio * 100:.2f}% exceeds limit {thresholds.max_drop_ratio * 100:.1f}%"
+        )
     if longest_burst > thresholds.max_drop_burst_frames:
         verdict = QAVerdict.FAIL
-        reasons.append(f"burst drop of {longest_burst} frames exceeds limit {thresholds.max_drop_burst_frames}")
+        reasons.append(
+            f"burst drop of {longest_burst} frames exceeds limit {thresholds.max_drop_burst_frames}"
+        )
 
     if not reasons:
-        explanation = f"Drop ratio {drop_ratio*100:.2f}% ({total_dropped} frames) within limits."
+        explanation = f"Drop ratio {drop_ratio * 100:.2f}% ({total_dropped} frames) within limits."
     else:
         explanation = "FAIL: " + "; ".join(reasons) + "."
 
@@ -67,8 +72,14 @@ def check_t1_frame_drops(
         metric_name="drop_ratio",
         value=float(drop_ratio),
         threshold=thresholds.max_drop_ratio,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
-        evidence={"total_dropped": total_dropped, "longest_burst": longest_burst, "drop_ratio": drop_ratio},
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
+        evidence={
+            "total_dropped": total_dropped,
+            "longest_burst": longest_burst,
+            "drop_ratio": drop_ratio,
+        },
         explanation=explanation,
     )
 
@@ -106,9 +117,12 @@ def check_t2_effective_fps(
             explanation=f"Overall FPS {overall_fps:.1f} Hz across short duration.",
         )
 
-    # Compute rolling FPS with 0.5s step
+    # Compute rolling FPS with 0.5s step over complete non-truncated windows
     step_s = 0.5
-    eval_times = np.arange(0.0, total_time - window_duration_s + step_s, step_s)
+    max_eval_t = total_time - window_duration_s
+    eval_times = np.arange(0.0, max_eval_t + 1e-6, step_s)
+    if len(eval_times) == 0:
+        eval_times = np.array([0.0])
     rolling_fps = []
     flagged_windows = []
 
@@ -141,7 +155,9 @@ def check_t2_effective_fps(
         metric_name="min_rolling_fps",
         value=min_fps,
         threshold=min_fps_thresh,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
         evidence={"min_fps": min_fps, "mean_fps": mean_fps, "nominal_rate_hz": nominal_rate_hz},
         explanation=explanation,
     )
@@ -183,7 +199,9 @@ def check_t3_jitter(
         verdict = QAVerdict.FAIL
         explanation = f"FAIL: Timestamp jitter std {std_jitter_ms:.2f} ms exceeds limit {thresholds.max_jitter_ms:.1f} ms."
     else:
-        explanation = f"Jitter within limits: std {std_jitter_ms:.2f} ms, p99 {p99_jitter_ms:.2f} ms."
+        explanation = (
+            f"Jitter within limits: std {std_jitter_ms:.2f} ms, p99 {p99_jitter_ms:.2f} ms."
+        )
 
     return QAResult(
         check_id="T3_JITTER",
@@ -228,7 +246,9 @@ def check_t4_timestamp_sanity(
     verdict = QAVerdict.FAIL if total_violations > 0 else QAVerdict.PASS
 
     if verdict == QAVerdict.FAIL:
-        explanation = f"FAIL: Detected {non_monotonic} non-monotonic and {duplicates} duplicate timestamps."
+        explanation = (
+            f"FAIL: Detected {non_monotonic} non-monotonic and {duplicates} duplicate timestamps."
+        )
     else:
         explanation = "Strict monotonic timestamps verified (0 duplicate, 0 non-monotonic)."
 
@@ -239,7 +259,9 @@ def check_t4_timestamp_sanity(
         metric_name="sanity_violations",
         value=float(total_violations),
         threshold=0.0,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
         evidence={"duplicates": duplicates, "non_monotonic": non_monotonic},
         explanation=explanation,
     )
@@ -276,7 +298,9 @@ def check_t5_transport_latency(
     spike_indices = np.where(residual_ms > thresholds.max_transport_latency_spike_ms)[0]
     flagged_windows = []
     for idx in spike_indices:
-        flagged_windows.append({"t_start_ns": int(device_times_ns[idx]), "t_end_ns": int(device_times_ns[idx])})
+        flagged_windows.append(
+            {"t_start_ns": int(device_times_ns[idx]), "t_end_ns": int(device_times_ns[idx])}
+        )
 
     max_spike_ms = float(np.max(residual_ms)) if len(residual_ms) > 0 else 0.0
     mean_latency_ms = float(np.mean(raw_latency_ms))
@@ -294,8 +318,14 @@ def check_t5_transport_latency(
         metric_name="max_spike_ms",
         value=max_spike_ms,
         threshold=thresholds.max_transport_latency_spike_ms,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
-        evidence={"mean_ms": mean_latency_ms, "max_spike_ms": max_spike_ms, "spikes_count": len(spike_indices)},
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
+        evidence={
+            "mean_ms": mean_latency_ms,
+            "max_spike_ms": max_spike_ms,
+            "spikes_count": len(spike_indices),
+        },
         explanation=explanation,
     )
 
@@ -350,7 +380,10 @@ def check_t6_inter_camera_sync(
         flagged_windows.append({"t_start_ns": int(times_a[idx]), "t_end_ns": int(times_a[idx])})
 
     verdict = QAVerdict.PASS
-    if max_offset_ms > thresholds.max_inter_cam_offset_ms or abs(drift_ppm) > thresholds.max_inter_cam_drift_ppm:
+    if (
+        max_offset_ms > thresholds.max_inter_cam_offset_ms
+        or abs(drift_ppm) > thresholds.max_inter_cam_drift_ppm
+    ):
         verdict = QAVerdict.FAIL
         explanation = f"FAIL: Sync offset max {max_offset_ms:.2f} ms (limit {thresholds.max_inter_cam_offset_ms:.1f} ms), drift {drift_ppm:.1f} ppm."
     else:
@@ -363,8 +396,15 @@ def check_t6_inter_camera_sync(
         metric_name="max_sync_offset_ms",
         value=max_offset_ms,
         threshold=thresholds.max_inter_cam_offset_ms,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
-        evidence={"mean_ms": mean_offset_ms, "p95_ms": p95_offset_ms, "max_ms": max_offset_ms, "drift_ppm": drift_ppm},
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
+        evidence={
+            "mean_ms": mean_offset_ms,
+            "p95_ms": p95_offset_ms,
+            "max_ms": max_offset_ms,
+            "drift_ppm": drift_ppm,
+        },
         explanation=explanation,
     )
 
@@ -414,7 +454,9 @@ def check_t8_imu_continuity(
         metric_name="gaps_count",
         value=float(total_gaps + sat_count),
         threshold=0.0,
-        flagged_windows=[{"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows],  # type: ignore[arg-type]
+        flagged_windows=[
+            {"t_start_ns": w["t_start_ns"], "t_end_ns": w["t_end_ns"]} for w in flagged_windows
+        ],  # type: ignore[arg-type]
         evidence={"dropout_gaps": total_gaps, "saturation_count": sat_count},
         explanation=explanation,
     )
@@ -445,7 +487,9 @@ def check_t7_imu_cam_offset(
     abs_offset_ms = abs(res.offset_ms)
     if res.correlation_peak < 0.25:
         verdict = QAVerdict.PASS
-        explanation = f"Low angular excitation (r={res.correlation_peak:.2f}); offset check skipped."
+        explanation = (
+            f"Low angular excitation (r={res.correlation_peak:.2f}); offset check skipped."
+        )
     elif abs_offset_ms > thresholds.max_imu_cam_offset_ms:
         verdict = QAVerdict.FAIL
         explanation = f"FAIL: IMU-Camera temporal offset {res.offset_ms:+.2f} ms exceeds limit {thresholds.max_imu_cam_offset_ms:.1f} ms (r={res.correlation_peak:.2f})."
@@ -466,4 +510,3 @@ def check_t7_imu_cam_offset(
         },
         explanation=explanation,
     )
-

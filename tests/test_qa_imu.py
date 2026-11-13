@@ -1,6 +1,5 @@
 """Unit tests for physical IMU QA checks: M1, M2, M3, and M4."""
 
-import numpy as np
 import pytest
 
 from rigsim.config.qa import IMUThresholds
@@ -67,9 +66,7 @@ def test_m3_imu_bias_jump() -> None:
     assert res_clean.verdict == QAVerdict.PASS
 
     # Bias jump at sample 100: shift by +0.06 rad/s
-    gyro_jump = [[0.001, 0.0, 0.0] for _ in range(100)] + [
-        [0.061, 0.0, 0.0] for _ in range(100)
-    ]
+    gyro_jump = [[0.001, 0.0, 0.0] for _ in range(100)] + [[0.061, 0.0, 0.0] for _ in range(100)]
     res_jump = check_m3_imu_bias_jump("imu0", accel, gyro_jump, ts)
     assert res_jump.verdict == QAVerdict.FAIL
     assert res_jump.value > 0.02
@@ -91,4 +88,3 @@ def test_m4_imu_gravity_direction() -> None:
     res_flipped = check_m4_imu_gravity_direction("imu0", accel_flipped, gyro, ts)
     assert res_flipped.verdict == QAVerdict.FAIL
     assert res_flipped.value > 150.0  # ~180 degrees error
-
