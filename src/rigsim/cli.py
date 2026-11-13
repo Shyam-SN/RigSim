@@ -1275,10 +1275,79 @@ def export_episodes(
         "-o",
         help="Destination directory for Episode packages",
     ),
+    min_duration: float = typer.Option(
+        2.0,
+        "--min-duration",
+        "-m",
+        help="Minimum episode duration in seconds to avoid micro-fragments",
+    ),
+    defect_margin: float = typer.Option(
+        0.2,
+        "--defect-margin",
+        help="Buffer margin in seconds trimmed from defect boundaries",
+    ),
+    preview: bool = typer.Option(
+        True,
+        "--preview/--no-preview",
+        help="Generate downsampled MP4 preview clip for visual review",
+    ),
 ) -> None:
     """Export QA-passed usable time segments as versioned Episode packages for Project 2 (EpisodeForge)."""
+    from rigsim.episode import EpisodeExtractor
+
+    console.print("[bold cyan]============================================================[/bold cyan]")
+    console.print("[bold green]RigSim Usable Episode Extractor & Delivery Packager[/bold green]")
+    console.print(f"Source Session: [cyan]{session}[/cyan] | Output Dir: [cyan]{output_dir}[/cyan]")
+    console.print("[bold cyan]============================================================[/bold cyan]\n")
+
+    if not session.exists() or not (session / "session.json").exists():
+        console.print(f"[bold red]Error: Session directory or session.json not found at: {session}[/bold red]")
+        raise typer.Exit(code=1)
+
+    extractor = EpisodeExtractor(
+        min_duration_s=min_duration,
+        defect_margin_s=defect_margin,
+        generate_preview=preview,
+    )
+    dataset = extractor.extract_episodes(session_dir=session, output_dir=output_dir)
+
+    # Print Episode Summary Table
+    tbl = Table(title=f"Exported Client Delivery Episodes: {dataset.dataset_id}")
+    tbl.add_column("Episode ID", style="bold cyan")
+    tbl.add_column("Relative Path", style="dim")
+    tbl.add_column("Duration", justify="right")
+    tbl.add_column("Video Frames", justify="right")
+    tbl.add_column("MCAP SHA-256 (Provenance)", style="dim")
+    tbl.add_column("QA Status", justify="center")
+
+    for ep in dataset.episodes:
+        # Aggregate total video frames
+        total_vid_frames = sum(cnt for top, cnt in ep["frames_count"].items() if "image_compressed" in top)
+        tbl.add_row(
+            ep["episode_id"],
+            ep["relative_path"],
+            f"{ep['duration_s']:.2f} s",
+            f"{total_vid_frames:,} frames",
+            f"{ep['mcap_sha256'][:16]}...",
+            f"[bold green]{ep['qa_verdict']}[/bold green]",
+        )
+
+    tbl.add_section()
+    tbl.add_row(
+        "[bold]TOTAL USABLE YIELD[/bold]",
+        f"[bold]{dataset.total_episodes} Episodes[/bold]",
+        f"[bold green]{dataset.total_usable_duration_s:.2f} s[/bold green]",
+        f"[dim]of {dataset.source_total_duration_s:.1f}s total[/dim]",
+        "-",
+        f"[bold green]{dataset.usable_yield_pct:.1f}%[/bold green]",
+    )
+    console.print(tbl)
+    console.print()
+
+    manifest_file = output_dir / session.name / "dataset_manifest.json"
     console.print(
-        f"[bold green]Exporting usable episodes from:[/bold green] [cyan]{session}[/cyan]"
+        f"[bold green]✓ Episode package successfully exported![/bold green] "
+        f"Manifest written to: [cyan]{manifest_file}[/cyan]\n"
     )
 
 
