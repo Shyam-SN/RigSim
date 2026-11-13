@@ -239,21 +239,70 @@ def qa(
 @app.command()
 def report(
     session: Path | None = typer.Argument(
-        None, help="Path to session.json for single-session report"
+        None, help="Path to session.json or session folder for single-session report"
     ),
     batch: Path | None = typer.Option(
         None, "--batch", "-b", help="Folder containing multiple sessions for multi-session summary"
     ),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Target output HTML file path"
+    ),
+    annotate_mcap: bool = typer.Option(
+        True, "--annotate-mcap/--no-annotate-mcap", help="Export QA defect events as Foxglove MCAP annotations"
+    ),
 ) -> None:
     """Generate offline self-contained HTML report (single session or multi-session batch)."""
+    from rigsim.report.session_report import generate_session_report
+    from rigsim.report.batch_report import generate_batch_report
+    from rigsim.report.foxglove import export_foxglove_annotations
+    from rigsim.qa.engine import QAEngine
+    from rigsim.config.session import Session
+    from rigsim.config.qa import QAResult, SessionVerdict
+    import json
+
     if batch:
         console.print(
             f"[bold green]Generating multi-session summary report for:[/bold green] [cyan]{batch}[/cyan]"
         )
+        out_html = generate_batch_report(batch, output_html=output)
+        console.print(f"[bold green]✓ Fleet summary report generated:[/bold green] [cyan]{out_html}[/cyan]")
     elif session:
         console.print(
             f"[bold green]Generating single-session HTML report for:[/bold green] [cyan]{session}[/cyan]"
         )
+        sess_dir = session.parent if session.is_file() else session
+        manifest = sess_dir / "session.json"
+        
+        with open(manifest) as f:
+            s_dict = json.load(f)
+        sess = Session.model_validate(s_dict)
+
+        # Check or compute QA
+        qa_results_file = sess_dir / "qa" / "results.json"
+        if not qa_results_file.exists():
+            qa_results_file = sess_dir / "qa_results.json"
+
+        if qa_results_file.exists():
+            with open(qa_results_file) as f:
+                r_dict = json.load(f)
+            verdict = SessionVerdict.model_validate(r_dict)
+            qa_results = verdict.results
+        else:
+            engine = QAEngine()
+            verdict = engine.process_session(manifest)
+            qa_results = verdict.results
+
+        # Optional Foxglove MCAP event annotation
+        if annotate_mcap:
+            mcap_name = Path(s_dict.get("mcap_path", "session.mcap")).name
+            mcap_file = sess_dir / mcap_name
+            if mcap_file.exists():
+                console.print(f"[bold cyan]Exporting Foxglove event annotations to:[/bold cyan] {mcap_file}")
+                export_foxglove_annotations(mcap_file, qa_results, session_verdict=verdict)
+                console.print("[bold green]✓ MCAP annotated with /qa/events and /qa/logs channels.[/bold green]")
+
+        out_html = generate_session_report(session, output_html=output)
+        console.print(f"[bold green]✓ Single-session HTML report generated:[/bold green] [cyan]{out_html}[/cyan]")
     else:
         console.print("[bold red]Error: Provide a session path or --batch directory.[/bold red]")
         raise typer.Exit(code=1)

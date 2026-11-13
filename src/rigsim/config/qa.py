@@ -40,6 +40,26 @@ class SessionVerdict(BaseModel):
     summary_rules: list[str] = Field(default_factory=list)
     results: list[QAResult] = Field(default_factory=list)
 
+    @property
+    def usable_percentage(self) -> float:
+        return self.yield_ratio * 100.0
+
+    @property
+    def usable_ranges(self) -> list[TimeWindow]:
+        return self.usable_time_ranges
+
+    @property
+    def summary_sentence(self) -> str:
+        return "; ".join(self.summary_rules) if self.summary_rules else "All critical checks passed."
+
+    @property
+    def critical_failures_count(self) -> int:
+        return sum(1 for r in self.results if r.verdict == QAVerdict.FAIL)
+
+    @property
+    def warnings_count(self) -> int:
+        return sum(1 for r in self.results if r.verdict == QAVerdict.WARN)
+
 
 class TimingThresholds(BaseModel):
     max_drop_ratio: float = 0.01  # 1%

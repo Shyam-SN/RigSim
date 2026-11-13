@@ -1,0 +1,87 @@
+{
+  "configById": {
+    "Image!cam_wrist": {
+      "cameraTopic": "/cam_wrist/image_compressed",
+      "calibrationTopic": "/cam_wrist/calibration",
+      "transformMarkers": true
+    },
+    "Image!cam_stereo_left": {
+      "cameraTopic": "/cam_stereo_left/image_compressed",
+      "calibrationTopic": "/cam_stereo_left/calibration",
+      "transformMarkers": true
+    },
+    "Plot!imu_gyro": {
+      "paths": [
+        {
+          "value": "/imu_rig/data.angular_velocity.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/imu_rig/data.angular_velocity.y",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/imu_rig/data.angular_velocity.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        }
+      ],
+      "showLegend": true,
+      "xAxisVal": "timestamp"
+    },
+    "Plot!imu_accel": {
+      "paths": [
+        {
+          "value": "/imu_rig/data.linear_acceleration.x",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/imu_rig/data.linear_acceleration.y",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/imu_rig/data.linear_acceleration.z",
+          "enabled": true,
+          "timestampMethod": "receiveTime"
+        }
+      ],
+      "showLegend": true,
+      "xAxisVal": "timestamp"
+    },
+    "Log!qa_diagnostics": {
+      "searchTerms": [],
+      "minLogLevel": 1
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "linkedGlobalVariables": [],
+  "playbackConfig": {
+    "speed": 1.0
+  },
+  "layout": {
+    "first": {
+      "first": "Image!cam_wrist",
+      "second": "Image!cam_stereo_left",
+      "direction": "row",
+      "splitPercentage": 50
+    },
+    "second": {
+      "first": {
+        "first": "Plot!imu_gyro",
+        "second": "Plot!imu_accel",
+        "direction": "column",
+        "splitPercentage": 50
+      },
+      "second": "Log!qa_diagnostics",
+      "direction": "row",
+      "splitPercentage": 60
+    },
+    "direction": "column",
+    "splitPercentage": 55
+  }
+}

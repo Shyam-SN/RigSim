@@ -358,3 +358,94 @@ This document serves as a living engineering journal and technical interview pre
 > 1. Planar Scene Degeneracy: When all tracked feature points lie on a single 3D plane (such as a tabletop or flat warehouse floor), the epipolar constraint degenerates into an infinite family of homographies, causing `cv2.findEssentialMat` to produce arbitrary two-fold ambiguities or spurious $180^\circ$ rotations.  
 > 2. Zero-Translation Degeneracy: When the camera undergoes pure rotation without translation ($\mathbf{t} \to 0$), the Essential matrix collapses ($\mathbf{E} \to 0$) and epipolar geometry is undefined.  
 > To make QA checks robust across all environments, we detect whether motion is planar/rotational and switch to Homography estimation with polar SVD decomposition. This guarantees stable rotation extraction even in tabletop manipulation cells."*
+
+---
+
+## Milestone M5: Reports & Foxglove Event Annotations
+
+### 1. Technical Context & Strategic Design Decisions
+
+#### A. Self-Contained Offline HTML Reporting Architecture
+- **The Context:** In security-sensitive robotics facilities (autonomous vehicles, defense, proprietary factory floors), QA inspection reports must open on air-gapped workstations without external CDN requests (e.g. `cdn.plot.ly`).
+- **The Optimization:** A naive export of multiple Plotly charts using `include_plotlyjs=True` embeds the 3.5 MB Plotly JavaScript bundle into every single chart div, causing a 6-chart HTML report to balloon to > 25 MB.
+- **The Pattern:** We embed `include_plotlyjs=True` on the *first* figure rendered in the DOM, and pass `include_plotlyjs=False` on all subsequent figures. This guarantees that Plotly's JavaScript runtime is loaded exactly once into the browser context, keeping the entire self-contained multi-chart report under 5 MB while functioning 100% offline.
+
+#### B. Visualizing Continuous Yield vs Discrete Defect Windows (Gantt Alignment)
+- **The Mathematics of Yield:** Field data collection yields are defined by interval complementation:
+  $$\mathcal{U} = [0, T] \setminus \bigcup_{i} [t_{i, \text{start}}, t_{i, \text{end}}]$$
+- **Visual Mapping:** In `generate_session_report`, the top horizontal lane displays the verified usable continuous sub-episodes in green (`#10B981`). Below it, each physical sensor stream (`cam_stereo_left`, `cam_wrist`, `imu_rig`) displays horizontal defect bars color-coded by defect severity (Red for critical fails, Amber for warnings), overlaid against shaded reference blocks representing ground-truth fault injection windows. Reviewers can visually inspect whether QA detectors fired at the exact onset of simulated physical faults.
+
+#### C. Operations Leadership Fleet Reporting (`rigsim report --batch`)
+- **Strategic Purpose:** A Strategic Projects Lead must report fleet-wide health to executive leadership rather than just inspecting single logs.
+- **Aggregated Metrics:**
+  1. Fleet Pass Rate: Percentage of recorded sessions meeting all critical SLAs.
+  2. Fleet Data Yield: Ratio of usable hours to recorded hours ($\sum U_i / \sum T_i$).
+  3. Pareto Distribution of Failure Root Causes: Horizontal bar chart isolating which sensor subsystem or check ID drives the highest rejection volume.
+  4. Per-Rig Comparison: Isolating whether hardware defects correlate with specific robot rigs or capture operators.
+
+#### D. Foxglove MCAP Timeline Event Annotations
+- **The Problem:** Reviewing a 10-minute multi-camera MCAP log in Foxglove Studio requires manually scrubbing through thousands of frames to find the exact 200 ms interval where a camera dropped frames or stereo epipolar error spiked.
+- **The Solution:** We write native Foxglove event schemas directly into the MCAP file:
+  - `/qa/events` (`foxglove.Event`): Stores `start_time`, `end_time`, and key-value metadata (`check_id`, `stream_id`, `verdict`, `explanation`). In Foxglove Studio, these render as interactive highlighted marker spans along the timeline slider.
+  - `/qa/logs` (`foxglove.Log`): Diagnostics entries with severity level (`ERROR` vs `WARNING`) allowing reviewers to click an error in the Logs panel to jump the playback cursor directly to the defect frame.
+
+---
+
+### 2. Mistakes Encountered, Diagnosis & Fixes
+
+#### Mistake 20: Protobuf Repeated Composite vs Dict in `Event.metadata`
+- **What Happened:** Attempting to assign `ev.metadata["check_id"] = "T1_FRAME_DROPS"` raised `TypeError: list indices must be integers`.
+- **How It Was Found:** Unit tests executing `export_foxglove_annotations`.
+- **Root Cause:** In the official Foxglove protobuf schema, `Event.metadata` is not a Python dictionary or protobuf map; it is a repeated field of `KeyValuePair` message types (`repeated KeyValuePair metadata = 3`).
+- **How It Was Fixed:** Populated metadata using repeated composite builders:
+  ```python
+  kv = event.metadata.add()
+  kv.key = "check_id"
+  kv.value = str(r.check_id)
+  ```
+
+#### Mistake 21: `mcap.writer.Writer` Method Name & Parameter Ordering
+- **What Happened:** Calling `writer.write_message(...)` raised `AttributeError: 'Writer' object has no attribute 'write_message'`.
+- **How It Was Found:** Running `rigsim report` on a clean session.
+- **Root Cause:** The Python `mcap` library names its message writing method `add_message`, with signature `add_message(channel_id, log_time, data, publish_time, sequence=0)` (swapping the typical positional placement of `data` and `publish_time`).
+- **How It Was Fixed:** Switched to explicit keyword arguments:
+  ```python
+  writer.add_message(
+      channel_id=channel_id,
+      log_time=w_start,
+      publish_time=w_start,
+      data=event.SerializeToString(),
+  )
+  ```
+
+#### Mistake 22: Plotly Margin Parameter Shorthand Collision
+- **What Happened:** Calling `fig.update_layout(margin={"bottom": 30})` raised `ValueError: Invalid property specified for object of type Margin: 'bottom'. Did you mean 'b'?`.
+- **How It Was Found:** Executing `rigsim report` on `data/clean_test`.
+- **Root Cause:** In Plotly's Python API, margin directions use single-letter keys (`l`, `r`, `t`, `b`) rather than full CSS property names (`left`, `right`, `top`, `bottom`).
+- **How It Was Fixed:** Updated all margin dictionaries across `session_report.py` and `batch_report.py` to use `{"l": 50, "r": 20, "t": 40, "b": 30}`.
+
+#### Mistake 23: Pydantic Attribute Access on `TimeWindow` Objects
+- **What Happened:** Accessing `w.get("t_start_ns")` on `r.flagged_windows` raised `AttributeError: 'TimeWindow' object has no attribute 'get'`.
+- **How It Was Found:** Running report generation on sessions containing validated `QAResult` objects.
+- **Root Cause:** In Pydantic v2, `flagged_windows` contains typed `TimeWindow` models rather than raw Python dictionaries.
+- **How It Was Fixed:** Used dynamic attribute resolution:
+  ```python
+  w_start = w.t_start_ns if hasattr(w, "t_start_ns") else w.get("t_start_ns", 0)
+  ```
+
+---
+
+### 3. Interview Cheat Sheet & Talking Points
+
+#### Question: *"How do you design a reporting pipeline for a large-scale robotics data collection fleet?"*
+> **Candidate Answer:**
+> *"We separate reporting into two tiers:  
+> 1. Engineering Deep-Dive Reports (Per-Session HTML): Self-contained offline HTML reports equipped with inline interactive Plotly charts, multi-stream Gantt timelines, thumbnail galleries of flagged defect frames, and physical traces (rolling FPS, transport latency, blur ratio, IMU-camera cross-correlation, extrinsic bump solvePnP). Reviewers can inspect a session completely offline without needing cloud dependencies.  
+> 2. Operational Leadership Fleet Dashboards (`report --batch`): Aggregated across hundreds of sessions to monitor fleet pass rates, usable data yields ($\text{usable hours} / \text{recorded hours}$), and Pareto failure root causes. This reveals whether data losses are caused by specific physical rigs (e.g. a loose camera mount causing extrinsic bump failures) or operator protocol deviations (e.g. lens occlusions during grasping).  
+> Additionally, we annotate MCAP logs with Foxglove `Event` and `Log` channels so reviewers can visually scrub to defect frames directly in playback software."*
+
+#### Question: *"Why is data yield a better metric than binary session pass/fail in robotics data infrastructure?"*
+> **Candidate Answer:**
+> *"In robotics, recording a 2-hour manipulation or autonomous driving session is expensive—requiring real hardware, human operators, and battery cycles.  
+> If an operator accidentally shadows a camera for 3 seconds or a single USB latency spike drops 2 frames at minute 45, a naive binary filter discards the entire 2-hour recording, throwing away valuable training data.  
+> Instead, our engine performs interval arithmetic: it records the exact nanosecond defect intervals $[t_{\text{start}}, t_{\text{end}}]$, slices them out, and validates the remaining continuous usable episodes. The session is tagged with its Data Yield (e.g. 97.4% usable), and only the validated sub-episodes are exported for policy training. This preserves collection ROI while ensuring zero corrupt data enters training."*
