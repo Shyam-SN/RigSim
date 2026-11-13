@@ -36,6 +36,7 @@ htmlcov/
 # Data and logs (local experiments)
 data/
 outputs/
+reports/
 *.mcap
 *.png
 *.mp4

@@ -207,3 +207,4 @@ rigsim qa data/phone_sessions/defect_01
 rigsim report data/phone_sessions/defect_01
 ```
 The generated report will display the flagged defect windows directly juxtaposed against your ground-truth labels on the Gantt timeline.
+

@@ -346,11 +346,213 @@ def report(
 def plan(
     rig: Path = typer.Argument(..., help="Path to rig YAML configuration"),
     bench_clips: Path | None = typer.Option(
-        None, "--bench-clips", help="Sample video clips for empirical codec benchmarking"
+        None, "--bench-clips", "-b", help="Sample video clips for empirical codec benchmarking"
+    ),
+    pricing: Path = typer.Option(
+        Path("configs/cost/storage_pricing.yaml"),
+        "--pricing",
+        "-p",
+        help="Storage and compute pricing YAML",
+    ),
+    hours: float = typer.Option(
+        1000.0,
+        "--hours",
+        "-h",
+        help="Total capture hours to model for storage and cloud budgeting",
+    ),
+    output: Path = typer.Option(
+        Path("reports/plan_report.html"),
+        "--output",
+        "-o",
+        help="Output path for interactive HTML capture planner report",
+    ),
+    skip_bench: bool = typer.Option(
+        False, "--skip-bench", help="Skip empirical FFmpeg codec sweeps and use baseline priors"
     ),
 ) -> None:
     """Run capture planner: calculate bandwidth, test codecs, model storage and cloud costs."""
-    console.print(f"[bold green]Running capture planner on:[/bold green] [cyan]{rig}[/cyan]")
+    import tempfile
+
+    import yaml
+
+    from rigsim.config.rig import RigConfig
+    from rigsim.plan import (
+        CodecBenchmarker,
+        CodecResult,
+        CostModel,
+        compute_rig_bandwidth,
+        generate_capture_planner_report,
+    )
+
+    console.print("[bold cyan]============================================================[/bold cyan]")
+    console.print("[bold green]RigSim Capture Planner & Economics Engine[/bold green]")
+    console.print(f"Target Rig Config: [cyan]{rig}[/cyan] | Horizon: [yellow]{hours:.0f} hours[/yellow]")
+    console.print("[bold cyan]============================================================[/bold cyan]\n")
+
+    if not rig.exists():
+        console.print(f"[bold red]Error: Rig configuration file not found at: {rig}[/bold red]")
+        raise typer.Exit(code=1)
+
+    with open(rig) as f:
+        rig_cfg = RigConfig.model_validate(yaml.safe_load(f))
+
+    # 1. Bandwidth calculations
+    bandwidth = compute_rig_bandwidth(rig_cfg)
+
+    # Print Bandwidth Breakdown
+    bw_table = Table(title=f"Rig Sensor Bandwidth Breakdown: {bandwidth.rig_name}")
+    bw_table.add_column("Stream ID", style="cyan")
+    bw_table.add_column("Type / Config", style="white")
+    bw_table.add_column("Rate", justify="right")
+    bw_table.add_column("Raw MB/s", justify="right")
+    bw_table.add_column("Raw GB/hr", justify="right")
+    bw_table.add_column("Raw TB/1,000h", justify="right")
+
+    for cam in bandwidth.cameras:
+        bw_table.add_row(
+            cam.stream_id,
+            f"{cam.width}x{cam.height} RGB",
+            f"{cam.fps:.1f} fps",
+            f"{cam.raw_mb_per_s:.1f}",
+            f"{cam.raw_gb_per_hour:.1f}",
+            f"{cam.raw_tb_per_1000h:.2f}",
+        )
+    if bandwidth.imu:
+        bw_table.add_row(
+            bandwidth.imu.stream_id,
+            f"6-DoF ({bandwidth.imu.sample_bytes} B/sample)",
+            f"{bandwidth.imu.rate_hz:.0f} Hz",
+            f"{bandwidth.imu.raw_mb_per_s:.3f}",
+            f"{bandwidth.imu.raw_gb_per_hour:.3f}",
+            f"{bandwidth.imu.raw_tb_per_1000h:.4f}",
+        )
+    bw_table.add_section()
+    bw_table.add_row(
+        "[bold]TOTAL SUSTAINED[/bold]",
+        f"[bold]{len(bandwidth.cameras)} Cams" + (" + 1 IMU[/bold]" if bandwidth.imu else "[/bold]"),
+        "-",
+        f"[bold green]{bandwidth.total_raw_mb_per_s:.1f}[/bold green]",
+        f"[bold green]{bandwidth.total_raw_gb_per_hour:.1f}[/bold green]",
+        f"[bold green]{bandwidth.total_raw_tb_per_1000h:.2f}[/bold green]",
+    )
+    console.print(bw_table)
+    console.print()
+
+    # Print Interface Limits Table
+    iface_table = Table(title="Physical Bus & Transport Interface Headroom")
+    iface_table.add_column("Interface Standard", style="cyan")
+    iface_table.add_column("Limit (MB/s)", justify="right")
+    iface_table.add_column("Rig Rate (MB/s)", justify="right")
+    iface_table.add_column("Utilization", justify="right")
+    iface_table.add_column("Status", justify="center")
+
+    for iface_name, info in bandwidth.interface_comparisons.items():
+        pct = float(info["utilization_pct"])
+        exceeded = bool(info["exceeded"])
+        if exceeded:
+            status = "[bold red]EXCEEDED[/bold red]"
+        elif pct > 75.0:
+            status = "[yellow]WARN (>75%)[/yellow]"
+        else:
+            status = "[green]SAFE[/green]"
+        iface_table.add_row(
+            iface_name,
+            f"{info['limit_mb_s']:.1f}",
+            f"{bandwidth.total_raw_mb_per_s:.1f}",
+            f"{pct:.1f}%",
+            status,
+        )
+    console.print(iface_table)
+    console.print()
+
+    if bandwidth.warnings:
+        for w in bandwidth.warnings:
+            console.print(f"[bold red]WARNING:[/bold red] {w}")
+        console.print()
+
+    # 2. Empirical Codec Benchmark
+    codec_results: list[CodecResult] | None = None
+    if not skip_bench:
+        console.print("[bold yellow]Running empirical FFmpeg codec transcoding sweeps...[/bold yellow]")
+        bench_dir = Path(tempfile.mkdtemp(prefix="rigsim_plan_bench_"))
+        try:
+            if bench_clips and bench_clips.exists():
+                target_clip = bench_clips
+            else:
+                target_clip = bench_dir / "bench_synthetic.mp4"
+                CodecBenchmarker.generate_synthetic_clip(target_clip, duration_s=2.0)
+
+            benchmarker = CodecBenchmarker(working_dir=bench_dir)
+            codec_results = benchmarker.run_benchmark(target_clip, max_duration_s=2.0)
+
+            if codec_results:
+                codec_tbl = Table(title="Empirical Codec Benchmark & Rate-Distortion Frontier")
+                codec_tbl.add_column("Codec", style="cyan")
+                codec_tbl.add_column("Profile / Preset")
+                codec_tbl.add_column("Compression", justify="right")
+                codec_tbl.add_column("Speedup", justify="right")
+                codec_tbl.add_column("SSIM", justify="right")
+                codec_tbl.add_column("PSNR (dB)", justify="right")
+                codec_tbl.add_column("ORB Match %", justify="right")
+                codec_tbl.add_column("Pareto Status", justify="center")
+
+                for cr in codec_results:
+                    pareto_str = "[bold magenta]Pareto Optimal[/bold magenta]" if cr.is_pareto else "[dim]Dominated[/dim]"
+                    codec_tbl.add_row(
+                        cr.codec_name,
+                        cr.preset_name,
+                        f"{cr.compression_ratio:.1f}x",
+                        f"{cr.speedup_realtime:.1f}x ({cr.encode_fps:.0f} fps)",
+                        f"{cr.ssim:.4f}",
+                        f"{cr.psnr_db:.1f}",
+                        f"{cr.feature_retention_ratio * 100:.1f}%",
+                        pareto_str,
+                    )
+                console.print(codec_tbl)
+                console.print()
+        finally:
+            benchmarker.cleanup()
+
+    # 3. Cost Model Evaluation
+    cost_model = CostModel.from_yaml(pricing) if pricing.exists() else CostModel()
+    cost_report = cost_model.evaluate(bandwidth=bandwidth, hours=hours, codec_results=codec_results)
+
+    cost_tbl = Table(title=f"Cloud Storage & Transfer Projections ({hours:.0f} Hours of Capture)")
+    cost_tbl.add_column("Format / Preset", style="cyan")
+    cost_tbl.add_column("Footprint", justify="right")
+    cost_tbl.add_column("Monthly Hot (S3)", justify="right")
+    cost_tbl.add_column("Monthly Archive", justify="right")
+    cost_tbl.add_column("Annual Archive", justify="right")
+    cost_tbl.add_column("Annual Hot Savings", justify="right")
+    cost_tbl.add_column("1Gbps Upload Time", justify="right")
+
+    for proj in cost_report.projections:
+        savings_str = (
+            f"[green]+${proj.annual_savings_vs_raw_hot_usd:,.2f}[/green]"
+            if proj.annual_savings_vs_raw_hot_usd > 0
+            else "[dim]Baseline[/dim]"
+        )
+        cost_tbl.add_row(
+            proj.format_name,
+            f"{proj.storage_tb:.2f} TB",
+            f"${proj.monthly_hot_usd:,.2f}",
+            f"${proj.monthly_archive_usd:,.2f}",
+            f"${proj.annual_archive_usd:,.2f}",
+            savings_str,
+            f"{proj.upload_duration_hours_1gbps:.1f} hrs",
+        )
+    console.print(cost_tbl)
+    console.print()
+
+    # 4. Generate Interactive Report
+    report_file = generate_capture_planner_report(
+        bandwidth=bandwidth,
+        cost_report=cost_report,
+        codec_results=codec_results,
+        output_path=output,
+    )
+    console.print(f"[bold green]✓ Interactive HTML report successfully generated at:[/bold green] [cyan]{report_file}[/cyan]\n")
+
 
 
 @app.command()
