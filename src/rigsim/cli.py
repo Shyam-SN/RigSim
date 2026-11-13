@@ -105,6 +105,15 @@ def qa(
 ) -> None:
     """Run full automated QA engine on a session and output PASS/WARN/FAIL verdicts."""
     console.print(f"[bold green]Running QA Engine on:[/bold green] [cyan]{session}[/cyan]")
+    import yaml
+    from rigsim.config.qa import QAThresholdsConfig
+    from rigsim.qa.engine import QAEngine
+
+    with open(thresholds) as f:
+        thresh_cfg = QAThresholdsConfig.model_validate(yaml.safe_load(f))
+
+    engine = QAEngine(thresholds=thresh_cfg)
+    engine.process_session(session)
 
 
 @app.command()

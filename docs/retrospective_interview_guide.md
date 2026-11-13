@@ -205,3 +205,68 @@ This document serves as a living engineering journal and technical interview pre
 
 ---
 *(Will be updated continuously after each milestone)*
+
+
+## Milestone M3: Automated QA Engine & Usable Episode Extraction
+
+### 1. Technical Context & Strategic Design Decisions
+
+#### A. Single-Stream Physical Sorting vs Transport-Interleaved Logging
+- **The Problem:** In production robotic data pipelines, high-rate sensor streams (such as a 200 Hz IMU where packets arrive every 5 ms) share USB hubs and OS socket queues with low-rate, high-bandwidth streams (like 30 Hz RGB-D cameras). Because transport latency exhibits random jitter ($\sigma \approx 1.5\text{ ms}$), messages arrive at the recording process slightly out-of-order and are serialized to MCAP in chronological host reception order (`log_time`).
+- **Why Sorting by `device_time_ns` is Essential:** If a QA engine naively evaluates packet intervals $\Delta t$ directly in the raw stream-reading order from disk, consecutive packets can appear to have negative deltas or artificial gaps $> 10\text{ ms}$, triggering false-positive dropout and jitter alarms. Sorting each stream's buffer by `device_time_ns` recovers the true physical sampling dynamics of the sensor silicon before evaluating physics-based QA checks.
+
+#### B. Separating Critical Perceptual Gating vs Operational Diagnostics
+- In RigSim, QA checks are bifurcated into two operational classes:
+  1. **Critical Perceptual Gating (`critical_checks`):** Checks like `T1_FRAME_DROPS`, `T4_TIMESTAMP_SANITY`, `T6_INTER_CAM_SYNC`, `I3_OCCLUSION`, `I4_FROZEN_FRAMES`, and `I5_CORRUPTION`. A failure here corrupts SLAM or behavioral cloning. Critical failures flag time windows and downgrade the overall session verdict to `FAIL`.
+  2. **Operational Diagnostics:** Checks like `T2_EFFECTIVE_FPS`, `T5_TRANSPORT_LATENCY`, and `I6_NOISE_LEVEL`. A host latency spike or temporary elevated analog sensor noise warrants an operator alert (`WARN`), but the physical sensor data remains valid and can still be used for training.
+
+#### C. Robust Transmission Stripe vs Natural Scene Edge Detection
+- **The Challenge:** Transmission stripes (caused by lost RTP packets, USB isochronous drops, or H.264 macroblock decode corruptions) produce sudden horizontal bands across the frame. A naive check inspecting step differences in row means (`row_diffs > 45`) triggers false positives whenever a sharp physical object (e.g. tabletop edge, dark graspable cube, or calibration board) aligns with a scanline.
+- **The Solution:** We enforce dual criteria:
+  1. An abrupt row-mean step difference $> 40.0$, AND
+  2. The stripe rows must exhibit near-zero horizontal standard deviation across columns ($\sigma_{\text{col}} < 12.0$), identifying uniform solid-color or repeated packet drop lines across the sensor width. Real physical scene objects have high spatial texture and perspective variations across columns ($\sigma_{\text{col}} > 50.0$), eliminating false positives.
+
+#### D. Non-Destructive QA Yield Calculation (Usable Episode Windows)
+- Rather than discarding an entire 30-minute recording session because of a 2-second glitch (e.g. an operator hand occluding one camera), RigSim calculates the set complement of flagged critical time intervals over the session duration $[t_{\text{start}}, t_{\text{end}}]$.
+- The engine reports `data_yield_ratio` ($T_{\text{usable}} / T_{\text{total}}$) and outputs continuous valid intervals (`usable_time_ranges`). In Project 2, this feeds the Episode Slicer to harvest valid clips without manual human review.
+
+---
+
+### 2. Mistakes Encountered, Diagnosis & Fixes
+
+#### Mistake 12: Interleaved MCAP Packets Causing False IMU Dropouts
+- **What Happened:** When reading `data/clean_test/session.mcap`, the QA check `T8_IMU_CONTINUITY` falsely reported 15 dropout gaps on a clean simulation session.
+- **How It Was Found:** Inspection of the QA output table revealed that simulated IMU packets generated at 1000 Hz simulation time were logged with host transport jitter.
+- **Root Cause:** MCAP messages were read in the global chronological order of `log_time`. Because jitter caused a packet at $t=5.0\text{ ms}$ to arrive at host $t_h = 10.2\text{ ms}$ and a packet at $t=10.0\text{ ms}$ to arrive at $t_h = 9.8\text{ ms}$, consecutive IMU samples appeared swapped.
+- **How It Was Fixed:** Updated `QAEngine.process_session()` to aggregate all messages per stream and sort them by `device_time_ns` (`order = np.argsort(cam_entry["device_times"])`) before passing them to the timing and image detectors.
+
+#### Mistake 13: Saturated Specular Tabletop & Lens Occlusion False Flags
+- **What Happened:** Clean tabletop simulation failed `I2_EXPOSURE`, `I3_OCCLUSION`, and `I5_CORRUPTION` on the moving wrist camera (`cam_wrist`).
+- **How It Was Found:** Inspecting pixel histograms showed that 82.8% of pixels in the wrist camera were saturated at 254–255, while edge gradients dropped below 3.0.
+- **Root Cause:** In the initial MJCF, total diffuse lighting summed to $0.8 + 0.4 + 0.4 = 1.6$ (over-illuminating the untextured beige table material by 31% and blowing it out to pure white 255). Furthermore, looking down 25 cm from an untextured tabletop meant $> 65\%$ of the image was featureless flat cream.
+- **How It Was Fixed:** Balanced the lighting in `tabletop_6cam.xml` to physical diffuse levels ($0.45, 0.25, 0.25$), mapped realistic room textures (`room_mat`) to the tabletop, and refined `check_i3_occlusion` to require both high flat ratio ($> 60\%$) and collapsed scene edge density ($\bar{G} < 6.0$).
+
+#### Mistake 14: Infinite Black Void in Surveillance Cameras Triggering Exposure Clipping
+- **What Happened:** The four fixed corner surveillance cameras (`cam_corner_fl`, `cam_corner_fr`, etc.) reported 40.5% pixel clipping and triggered `FAIL` on `I2_EXPOSURE`.
+- **How It Was Found:** Pixel breakdown showed that `clip_255` was 0.0% (no overexposure), but `clip_0` was 40.5%.
+- **Root Cause:** The surveillance cameras had wide $80^\circ$ FOV mounted at $1.2\text{ m}$ elevation looking outward. The tabletop scene only defined a $3 \times 3\text{ m}$ floor plane with no walls. Any ray cast beyond 3 meters hit the empty black rendering void (RGB $[0, 0, 0]$).
+- **How It Was Fixed:** Expanded the floor plane to $8 \times 8\text{ m}$ and enclosed the tabletop area with textured room walls (`wall_n`, `wall_s`, `wall_e`, `wall_w`), creating a realistic indoor lab environment with continuous ambient illumination.
+
+---
+
+### 3. Interview Cheat Sheet & Talking Points
+
+#### Question: *"How do you design a data QA engine that can handle both strict client SLAs and imperfect real-world capture conditions?"*
+> **Candidate Answer:**
+> *"The key is decoupling perceptual validity from operational warnings, and using time-interval arithmetic rather than binary session rejection.  
+> First, we define two threshold tiers: Critical Gating (frame drops > 1%, non-monotonic timestamps, stereo unsync > 2 ms, lens occlusions, corruption stripes) which make data unusable for SLAM or imitation learning, and Operational Warnings (effective FPS dips, transport latency spikes, elevated sensor noise) which provide feedback to field operators.  
+> Second, when a critical failure occurs, the engine logs exact nanosecond intervals $[t_{\text{start}}, t_{\text{end}}]$ of the defect rather than discarding the entire session. By computing the complement of these intervals against the total session duration, we calculate the Data Yield (e.g. 96.5% usable data) and export only the validated continuous sub-episodes. This maximizes ROI on expensive field data collection while enforcing zero defective data in production model training."*
+
+#### Question: *"In a multi-camera rig, why can't you just use standard image mean brightness to detect exposure problems?"*
+> **Candidate Answer:**
+> *"Mean brightness alone hides critical sensor defects like localized saturation and shadow clipping.  
+> For instance, in a robotic manipulation rig with overhead lights, a shiny metallic tool or a white calibration board can cause severe specular glare where keypoints are clipped at 255, yet the overall frame mean is an acceptable 120 because the dark background offsets it.  
+> A robust exposure check must monitor three metrics concurrently:  
+> 1. Global Mean Luminance: To detect overall underexposure ($< 20$) or washed out overexposure ($> 235$).  
+> 2. Pixel Clipping Ratios at 0 and 255: Checking the fraction of pixels stuck at sensor rail limits ($C_{0} + C_{255}$).  
+> 3. Target-Aware Thresholding: Recognizing that calibration rigs with high-contrast ChArUco fiducials naturally contain ~10–12% pure black and white pixels by design, so clipping limits must be parameterized based on the active capture protocol."*

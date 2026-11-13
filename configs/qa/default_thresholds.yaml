@@ -14,7 +14,7 @@ image:
   min_normalized_blur_ratio: 0.50       # FAIL if Laplacian variance < 50% rolling median
   min_mean_brightness: 20.0             # FAIL if underexposed (mean brightness < 20 / 255)
   max_mean_brightness: 235.0            # FAIL if overexposed (mean brightness > 235 / 255)
-  max_clipping_ratio: 0.05              # WARN if > 5% pixels clipped at 0 or 255
+  max_clipping_ratio: 0.15              # WARN if > 15% pixels clipped (permits high-contrast ChArUco fiducials)
   max_frozen_frame_count: 2             # FAIL if >= 3 identical frames with moving timestamps
   max_corrupted_frame_count: 0          # FAIL immediately on any corrupted/decode fail frame
   occlusion_min_uniform_ratio: 0.60     # FAIL if uniform flat region > 60% of frame

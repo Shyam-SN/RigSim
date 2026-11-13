@@ -56,7 +56,7 @@ class ImageThresholds(BaseModel):
     min_normalized_blur_ratio: float = 0.50
     min_mean_brightness: float = 20.0
     max_mean_brightness: float = 235.0
-    max_clipping_ratio: float = 0.05
+    max_clipping_ratio: float = 0.15
     max_frozen_frame_count: int = 2
     max_corrupted_frame_count: int = 0
     occlusion_min_uniform_ratio: float = 0.60

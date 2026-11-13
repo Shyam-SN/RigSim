@@ -11,18 +11,24 @@
     <texture type="2d" name="charuco_tex" file="charuco_board.png"/>
     <material name="charuco_mat" texture="charuco_tex" reflectance="0.0"/>
     <texture type="2d" name="room_tex" file="room_texture.png"/>
-    <material name="room_mat" texture="room_tex" reflectance="0.1"/>
+    <material name="room_mat" texture="room_tex" reflectance="0.05"/>
     <material name="strobe_mat" rgba="0.1 0.1 0.1 1" emission="0.0"/>
-    <material name="table_mat" rgba="0.82 0.70 0.55 1" specular="0.2"/>
+    <material name="table_mat" texture="room_tex" rgba="0.75 0.70 0.65 1" specular="0.05" shininess="0.1"/>
   </asset>
 
   <worldbody>
-    <light diffuse="0.8 0.8 0.8" pos="0 0 3.0" dir="0 0 -1" castshadow="true"/>
-    <light diffuse="0.4 0.4 0.4" pos="1.5 1.5 2.5" dir="-1 -1 -1"/>
-    <light diffuse="0.4 0.4 0.4" pos="-1.5 -1.5 2.5" dir="1 1 -1"/>
+    <light diffuse="0.45 0.45 0.45" pos="0 0 3.0" dir="0 0 -1" castshadow="true"/>
+    <light diffuse="0.25 0.25 0.25" pos="1.5 1.5 2.5" dir="-1 -1 -1"/>
+    <light diffuse="0.25 0.25 0.25" pos="-1.5 -1.5 2.5" dir="1 1 -1"/>
 
-    <!-- Room Floor and Walls -->
-    <geom name="floor" type="plane" size="3 3 0.1" material="room_mat"/>
+    <!-- Room Floor and Enclosing Walls -->
+    <geom name="floor" type="plane" size="8 8 0.1" material="room_mat"/>
+    <body name="walls" pos="0 0 1.5">
+      <geom name="wall_n" type="box" size="4 0.05 1.5" pos="0 3.5 0" material="room_mat"/>
+      <geom name="wall_s" type="box" size="4 0.05 1.5" pos="0 -3.5 0" material="room_mat"/>
+      <geom name="wall_e" type="box" size="0.05 4 1.5" pos="3.5 0 0" material="room_mat"/>
+      <geom name="wall_w" type="box" size="0.05 4 1.5" pos="-3.5 0 0" material="room_mat"/>
+    </body>
 
     <!-- Table -->
     <body name="table" pos="0 0 0.35">

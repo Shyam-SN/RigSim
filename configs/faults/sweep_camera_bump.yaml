@@ -10,3 +10,4 @@ faults:
     params:
       delta_rotation_deg: 2.0
       delta_translation_mm: 8.0
+
