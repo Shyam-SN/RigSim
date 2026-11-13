@@ -179,19 +179,101 @@ This document details every automated Quality Assurance (QA) check in RigSim. Fo
 ---
 
 ## 3. Calibration & Geometric Checks (C1 – C4)
-*(Implemented in Milestone M4)*
 
-- **C1: ChArUco Reprojection Quality**: Evaluates corner detection reprojection RMS error (limit: $< 0.5\text{ px}$).
-- **C2: Camera Bump / Extrinsic Shift**: Solves Perspective-n-Point ($PnP$) on known fiducial board across session; flags physical rig deformation if camera orientation shifts $> 0.5^\circ$ or position shifts $> 3.0\text{ mm}$.
-- **C3: Stereo Epipolar Consistency**: Measures vertical disparity across rectified stereo pairs; flags calibration invalidation if epipolar error $> 1.0\text{ px}$.
-- **C4: Calibration Staleness**: Enforces calibration file recency according to capture protocol SLAs (e.g. valid for 7 days).
+### C1: ChArUco Reprojection Quality (`C1_CHARUCO_REPROJECTION`)
+- **What**: Evaluates corner detection reprojection RMS error from intrinsic camera calibration.
+- **Why**: High reprojection error indicates inaccurate lens modeling (focal length or distortion), degrading 3D reconstruction and depth accuracy.
+- **Algorithm**:
+  Given 3D board object points $\mathbf{X}_j$ and detected 2D corner image points $\mathbf{u}_{i, j}$, compute reprojected points $\hat{\mathbf{u}}_{i, j} = \pi(K, D, R_i, \mathbf{t}_i, \mathbf{X}_j)$.
+  Calculate root-mean-square reprojection error:
+  $$\text{RMS} = \sqrt{\frac{1}{N} \sum_{i, j} \|\mathbf{u}_{i, j} - \hat{\mathbf{u}}_{i, j}\|^2}$$
+- **Threshold**: `max_charuco_reprojection_rms_px`: $0.50\text{ px}$ (**FAIL**).
+- **Failure Modes**: Subpixel corner jitter from motion blur, out-of-focus optics, or incorrect radial/tangential distortion model.
 
 ---
 
-## 4. IMU Sanity Checks (M1 – M4)
-*(Implemented in Milestone M4)*
+### C2: Camera Bump / Extrinsic Shift (`C2_CAMERA_BUMP`)
+- **What**: Solves Perspective-n-Point ($PnP$) on known fiducial board across session; flags physical rig deformation.
+- **Why**: Physical impacts, thermal expansion, or vibration during robot capture deform the sensor mount, invalidating static extrinsic calibration matrices ($T_{\text{rig}}^{\text{cam}}$).
+- **Algorithm**:
+  For each frame $i$ with visible fiducials, solve $PnP$ iteratively: $\min_{R_i, \mathbf{t}_i} \sum \|\mathbf{u}_j - \pi(K, D, R_i, \mathbf{t}_i, \mathbf{X}_j)\|^2$.
+  Compute relative transform against initial baseline pose $(R_0, \mathbf{t}_0)$:
+  $$\Delta R = R_i R_0^T, \quad \Delta \mathbf{t} = \mathbf{t}_i - \mathbf{t}_0$$
+  Angular shift: $\Delta \theta = \arccos((\text{Tr}(\Delta R) - 1) / 2) \times \frac{180^\circ}{\pi}$.
+  Translation shift: $\Delta d = \|\Delta \mathbf{t}\| \times 1000\text{ mm}$.
+- **Threshold**:
+  - `max_bump_rotation_deg`: $0.50^\circ$ (**FAIL**)
+  - `max_bump_translation_mm`: $3.0\text{ mm}$ (**FAIL**)
+- **Failure Modes**: Structural shock, loose camera mount thumbscrews, arm collision.
 
-- **M1: Static Gravity Norm**: During stationary intervals, verifies $\|\mathbf{a}\| \approx 9.81 \pm 0.2\text{ m/s}^2$.
-- **M2: Static Gyro & Accel Bias**: Quantifies zero-rate output drift (limit: gyro $< 0.01\text{ rad/s}$, accel $< 0.1\text{ m/s}^2$).
-- **M3: Bias Step Jumps**: Detects sudden shifts in estimated bias indicative of thermal shock or physical sensor damage.
-- **M4: Gravity Alignment**: Validates that estimated gravity vector points in the expected world $-Z$ direction when rig is upright.
+---
+
+### C3: Stereo Epipolar Consistency (`C3_STEREO_CONSISTENCY`)
+- **What**: Validates epipolar geometric alignment between synchronized stereo pairs.
+- **Why**: Stereo disparity estimation algorithms assume feature correspondences lie strictly along calibrated epipolar lines ($y_L = y_R$ after rectification).
+- **Algorithm**:
+  For matched points $\mathbf{x}_L \leftrightarrow \mathbf{x}_R$, evaluate algebraic epipolar distance using Fundamental matrix $F$:
+  $$d_{\text{epipolar}} = \frac{|\mathbf{x}_R^T F \mathbf{x}_L|}{\sqrt{(F \mathbf{x}_L)_x^2 + (F \mathbf{x}_L)_y^2}}$$
+- **Threshold**: `max_epipolar_error_px`: $1.0\text{ px}$ (**FAIL**).
+- **Failure Modes**: Stereo baseline flexure, asymmetric thermal expansion.
+
+---
+
+### C4: Calibration Staleness (`C4_CALIBRATION_STALENESS`)
+- **What**: Enforces calibration file recency according to capture protocol SLAs.
+- **Why**: Thermal cycles, transport shock, and material creep degrade physical rig geometry over days/weeks.
+- **Algorithm**:
+  Calculate calendar age: $\Delta T_{\text{days}} = (T_{\text{session}} - T_{\text{calibration}}) / 86400$.
+- **Threshold**: Max age $7.0\text{ days}$ (**WARN**).
+- **Failure Modes**: Expired calibration certificate, field capture without daily calibration routine.
+
+---
+
+## 4. IMU Physical & Calibration Checks (M1 – M4)
+
+### M1: Static Gravity Norm (`M1_IMU_GRAVITY`)
+- **What**: During stationary periods, verifies $\|\mathbf{a}\| \approx 9.80665\text{ m/s}^2$.
+- **Why**: Accelerometer scale-factor drift or uncalibrated cross-axis sensitivity produces systematic velocity drift in state estimation filters.
+- **Algorithm**:
+  Detect stationary windows via gyroscope threshold ($\|\boldsymbol{\omega}\| < 0.08\text{ rad/s}$) and accelerometer variance ($\sigma_a < 0.15\text{ m/s}^2$).
+  Compute mean static norm $\|\bar{\mathbf{a}}\|$.
+  Evaluate error: $\epsilon_g = |\|\bar{\mathbf{a}}\| - 9.80665|$.
+- **Threshold**: `max_gravity_error_m_s2`: $0.20\text{ m/s}^2$ (**FAIL**).
+- **Failure Modes**: Accelerometer scale factor drift, sensor clipping.
+
+---
+
+### M2: Zero-Rate Static Bias (`M2_IMU_STATIC_BIAS`)
+- **What**: Measures gyroscope zero-rate drift and accelerometer offset during stationary intervals.
+- **Why**: Constant unmodeled gyroscope bias integrates directly into quadratic orientation error and cubic position error ($\frac{1}{6} b_a t^3$).
+- **Algorithm**:
+  Compute mean gyro vector during static interval: $\mathbf{b}_g = \frac{1}{N} \sum_{i \in \text{static}} \boldsymbol{\omega}_i$.
+  Compute gyro bias norm: $\|\mathbf{b}_g\|$.
+- **Threshold**:
+  - `max_gyro_static_bias_rad_s`: $0.01\text{ rad/s}$ (**FAIL**)
+  - `max_accel_static_bias_m_s2`: $0.10\text{ m/s}^2$ (**FAIL**)
+- **Failure Modes**: Thermal warmup drift, uncalibrated MEMS sensor bias.
+
+---
+
+### M3: Bias Step Jumps (`M3_IMU_BIAS_JUMP`)
+- **What**: Detects sudden step shifts in sensor bias between consecutive stationary segments.
+- **Why**: Physical impacts or internal MEMS stress releases can induce permanent bias shifts that cause Kalman filter divergences.
+- **Algorithm**:
+  Evaluate bias vectors $\mathbf{b}_k, \mathbf{b}_{k-1}$ across consecutive static segments.
+  Flag step jump if $\|\mathbf{b}_k - \mathbf{b}_{k-1}\| > 0.02\text{ rad/s}$ or accel shift $> 0.20\text{ m/s}^2$.
+- **Threshold**: $0$ bias jumps permitted (**FAIL**).
+- **Failure Modes**: Mechanical impact shock, sudden thermal shock.
+
+---
+
+### M4: Gravity Vector Orientation (`M4_IMU_GRAVITY_DIR`)
+- **What**: Validates that measured static gravity reaction aligns with expected rig mounting orientation.
+- **Why**: Catches flipped sensor axes ($x \leftrightarrow y$ or inverted $z$) before data reaches training or SLAM.
+- **Algorithm**:
+  Compute normalized static gravity reaction unit vector $\hat{\mathbf{u}} = \bar{\mathbf{a}} / \|\bar{\mathbf{a}}\|$.
+  Compare with expected upright unit vector $\hat{\mathbf{u}}_{\text{exp}}$ via angular difference:
+  $$\theta = \arccos(\hat{\mathbf{u}} \cdot \hat{\mathbf{u}}_{\text{exp}}) \times \frac{180^\circ}{\pi}$$
+- **Threshold**: Max angle error $25.0^\circ$ (**FAIL**).
+- **Failure Modes**: Inverted sensor mount, wrong coordinate frame convention (NED vs ENU vs robotics optical frame).
+

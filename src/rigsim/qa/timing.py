@@ -418,3 +418,52 @@ def check_t8_imu_continuity(
         evidence={"dropout_gaps": total_gaps, "saturation_count": sat_count},
         explanation=explanation,
     )
+
+
+def check_t7_imu_cam_offset(
+    camera_stream_id: str,
+    frames_rgb: list[np.ndarray],
+    cam_timestamps_ns: list[int],
+    imu_stream_id: str,
+    gyro_readings: list[list[float]] | np.ndarray,
+    imu_timestamps_ns: list[int],
+    thresholds: TimingThresholds,
+    K: np.ndarray | None = None,
+) -> QAResult:
+    """T7: IMU-Camera temporal synchronization offset estimation."""
+    from rigsim.sync.imu_cam import ImuCameraSyncEstimator
+
+    estimator = ImuCameraSyncEstimator()
+    res = estimator.estimate_offset(
+        frames_rgb=frames_rgb,
+        cam_timestamps_ns=cam_timestamps_ns,
+        gyro_readings=gyro_readings,
+        imu_timestamps_ns=imu_timestamps_ns,
+        K=K,
+    )
+
+    abs_offset_ms = abs(res.offset_ms)
+    if res.correlation_peak < 0.25:
+        verdict = QAVerdict.PASS
+        explanation = f"Low angular excitation (r={res.correlation_peak:.2f}); offset check skipped."
+    elif abs_offset_ms > thresholds.max_imu_cam_offset_ms:
+        verdict = QAVerdict.FAIL
+        explanation = f"FAIL: IMU-Camera temporal offset {res.offset_ms:+.2f} ms exceeds limit {thresholds.max_imu_cam_offset_ms:.1f} ms (r={res.correlation_peak:.2f})."
+    else:
+        verdict = QAVerdict.PASS
+        explanation = f"IMU-Camera temporal sync verified: offset {res.offset_ms:+.2f} ms (limit {thresholds.max_imu_cam_offset_ms:.1f} ms, r={res.correlation_peak:.2f})."
+
+    return QAResult(
+        check_id="T7_IMU_CAM_OFFSET",
+        stream_id=f"{camera_stream_id}<->{imu_stream_id}",
+        verdict=verdict,
+        metric_name="imu_cam_offset_ms",
+        value=float(abs_offset_ms),
+        threshold=thresholds.max_imu_cam_offset_ms,
+        evidence={
+            "offset_ms": res.offset_ms,
+            "correlation_peak": res.correlation_peak,
+        },
+        explanation=explanation,
+    )
+

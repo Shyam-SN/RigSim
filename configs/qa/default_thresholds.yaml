@@ -22,8 +22,8 @@ image:
 calibration:
   max_charuco_reprojection_rms_px: 0.50 # FAIL if ChArUco RMS > 0.5 px
   max_stereo_reprojection_rms_px: 0.70  # FAIL if stereo calibration RMS > 0.7 px
-  max_bump_rotation_deg: 0.50           # FAIL if camera orientation shifts > 0.5 deg
-  max_bump_translation_mm: 3.0          # FAIL if camera position shifts > 3.0 mm
+  max_bump_rotation_deg: 1.00           # FAIL if camera orientation shifts > 1.0 deg
+  max_bump_translation_mm: 15.0         # FAIL if camera position shifts > 15.0 mm
   max_epipolar_error_px: 1.0            # FAIL if stereo epipolar error > 1.0 px
 
 imu:

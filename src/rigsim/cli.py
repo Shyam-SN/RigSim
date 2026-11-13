@@ -4,6 +4,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
 app = typer.Typer(
     name="rigsim",
@@ -86,11 +87,130 @@ def calibrate(
     session_or_folder: Path = typer.Argument(
         ..., help="Path to session directory or image folder with ChArUco targets"
     ),
+    stereo: bool = typer.Option(
+        True, "--stereo/--no-stereo", help="Perform stereo calibration on stereo pairs"
+    ),
+    output_dir: Path | None = typer.Option(
+        None, "--output-dir", "-o", help="Directory to save calibration JSON results"
+    ),
 ) -> None:
     """Perform intrinsic and stereo calibration using ChArUco fiducials."""
+    import json
+    import cv2
+    import numpy as np
+    from foxglove_schemas_protobuf import CompressedImage_pb2
+    from mcap.reader import make_reader
+    from rigsim.calib.charuco import CharucoCalibrator
+
     console.print(
         f"[bold green]Running calibration on:[/bold green] [cyan]{session_or_folder}[/cyan]"
     )
+
+    manifest_file = session_or_folder / "session.json" if session_or_folder.is_dir() else session_or_folder
+    if manifest_file.exists():
+        with open(manifest_file) as f:
+            sess_meta = json.load(f)
+        mcap_path = manifest_file.parent / Path(sess_meta.get("mcap_path", "session.mcap")).name
+    else:
+        mcap_path = session_or_folder
+
+    if not mcap_path.exists():
+        console.print(f"[bold red]MCAP log file not found at: {mcap_path}[/bold red]")
+        raise typer.Exit(code=1)
+
+    # Ingest stereo or mono camera frames
+    left_frames = []
+    right_frames = []
+    with open(mcap_path, "rb") as f:
+        reader = make_reader(f)
+        for schema, channel, message in reader.iter_messages():
+            if "cam_stereo_left/image_compressed" in channel.topic or "cam0/image_compressed" in channel.topic:
+                pb = CompressedImage_pb2.CompressedImage()
+                pb.ParseFromString(message.data)
+                bgr = cv2.imdecode(np.frombuffer(pb.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if bgr is not None:
+                    left_frames.append(bgr)
+            elif "cam_stereo_right/image_compressed" in channel.topic or "cam1/image_compressed" in channel.topic:
+                pb = CompressedImage_pb2.CompressedImage()
+                pb.ParseFromString(message.data)
+                bgr = cv2.imdecode(np.frombuffer(pb.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if bgr is not None:
+                    right_frames.append(bgr)
+
+    if not left_frames:
+        console.print("[bold red]No camera frames found for calibration.[/bold red]")
+        raise typer.Exit(code=1)
+
+    calib = CharucoCalibrator()
+    h, w = left_frames[0].shape[:2]
+
+    # Mono calibration
+    mono_left = calib.calibrate_mono(left_frames, (w, h))
+
+    table = Table(title="ChArUco Intrinsic Calibration Results")
+    table.add_column("Camera", style="cyan")
+    table.add_column("Reprojection RMS (px)", style="bold green")
+    table.add_column("Focal Length (fx, fy)", style="magenta")
+    table.add_column("Principal Point (cx, cy)", style="yellow")
+    table.add_column("Views (Corners)", style="white")
+
+    table.add_row(
+        "Left Camera",
+        f"{mono_left.rms_reprojection_px:.3f} px",
+        f"({mono_left.K[0, 0]:.1f}, {mono_left.K[1, 1]:.1f})",
+        f"({mono_left.K[0, 2]:.1f}, {mono_left.K[1, 2]:.1f})",
+        f"{mono_left.num_views} ({mono_left.num_corners_total})",
+    )
+
+    stereo_res = None
+    if stereo and right_frames and len(left_frames) == len(right_frames):
+        mono_right = calib.calibrate_mono(right_frames, (w, h))
+        table.add_row(
+            "Right Camera",
+            f"{mono_right.rms_reprojection_px:.3f} px",
+            f"({mono_right.K[0, 0]:.1f}, {mono_right.K[1, 1]:.1f})",
+            f"({mono_right.K[0, 2]:.1f}, {mono_right.K[1, 2]:.1f})",
+            f"{mono_right.num_views} ({mono_right.num_corners_total})",
+        )
+        stereo_res = calib.calibrate_stereo(
+            left_frames,
+            right_frames,
+            (w, h),
+            mono_left.K,
+            mono_left.distortion,
+            mono_right.K,
+            mono_right.distortion,
+        )
+
+    console.print(table)
+
+    if stereo_res:
+        s_table = Table(title="Stereo Extrinsic Calibration Results")
+        s_table.add_column("Metric", style="cyan")
+        s_table.add_column("Value", style="bold green")
+        s_table.add_row("Stereo RMS Error", f"{stereo_res.rms_stereo_px:.3f} px")
+        s_table.add_row("Baseline Distance", f"{stereo_res.baseline_m * 1000.0:.2f} mm")
+        s_table.add_row("Translation [Tx, Ty, Tz]", str(np.round(stereo_res.T.ravel() * 1000.0, 2)) + " mm")
+        s_table.add_row("Stereo Pairs Used", str(stereo_res.num_stereo_pairs))
+        console.print(s_table)
+
+    # Save results
+    out_dir = output_dir or (manifest_file.parent / "calib" if manifest_file.exists() else Path("data/calib"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    calib_json = {
+        "rms_px": mono_left.rms_reprojection_px,
+        "K": mono_left.K.tolist(),
+        "distortion": mono_left.distortion.tolist(),
+        "stereo": {
+            "rms_stereo_px": stereo_res.rms_stereo_px,
+            "baseline_m": stereo_res.baseline_m,
+            "R": stereo_res.R.tolist(),
+            "T": stereo_res.T.tolist(),
+        } if stereo_res else None,
+    }
+    with open(out_dir / "calibration.json", "w") as f:
+        json.dump(calib_json, f, indent=2)
+    console.print(f"[bold green]Saved calibration parameters to:[/bold green] {out_dir / 'calibration.json'}")
 
 
 @app.command()
@@ -182,11 +302,79 @@ def sync_imu_cam(
     session: Path = typer.Argument(
         ..., help="Path to session for IMU-camera temporal offset estimation"
     ),
+    camera: str = typer.Option(
+        "cam_wrist", "--camera", "-c", help="Camera stream ID to synchronize with IMU"
+    ),
 ) -> None:
     """Estimate IMU-camera temporal offset via visual angular velocity and gyroscope cross-correlation."""
+    import json
+    import cv2
+    import numpy as np
+    from foxglove_schemas_protobuf import CompressedImage_pb2
+    from mcap.reader import make_reader
+    from rigsim.sync.imu_cam import ImuCameraSyncEstimator
+
     console.print(
-        f"[bold green]Estimating IMU-camera offset for:[/bold green] [cyan]{session}[/cyan]"
+        f"[bold green]Estimating IMU-camera offset for:[/bold green] [cyan]{session}[/cyan] (camera: [yellow]{camera}[/yellow])"
     )
+
+    manifest_file = session / "session.json" if session.is_dir() else session
+    if manifest_file.exists():
+        with open(manifest_file) as f:
+            sess_meta = json.load(f)
+        mcap_path = manifest_file.parent / Path(sess_meta.get("mcap_path", "session.mcap")).name
+    else:
+        mcap_path = session
+
+    cam_frames = []
+    cam_ts = []
+    gyro_readings = []
+    imu_ts = []
+
+    cam_topic_pattern = f"/{camera}/image_compressed"
+
+    with open(mcap_path, "rb") as f:
+        reader = make_reader(f)
+        for schema, channel, message in reader.iter_messages():
+            if cam_topic_pattern in channel.topic or (camera == "cam_wrist" and "cam0/image_compressed" in channel.topic):
+                pb = CompressedImage_pb2.CompressedImage()
+                pb.ParseFromString(message.data)
+                bgr = cv2.imdecode(np.frombuffer(pb.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if bgr is not None:
+                    cam_frames.append(bgr)
+                    cam_ts.append(message.publish_time)
+            elif "/data" in channel.topic and "imu" in channel.topic:
+                payload = json.loads(message.data)
+                gyr = payload.get("angular_velocity", {"x": 0.0, "y": 0.0, "z": 0.0})
+                gyro_readings.append([gyr["x"], gyr["y"], gyr["z"]])
+                imu_ts.append(message.publish_time)
+
+    if len(cam_ts) > 1:
+        order_cam = np.argsort(cam_ts)
+        cam_ts = [cam_ts[i] for i in order_cam]
+        cam_frames = [cam_frames[i] for i in order_cam]
+
+    if len(imu_ts) > 1:
+        order_imu = np.argsort(imu_ts)
+        imu_ts = [imu_ts[i] for i in order_imu]
+        gyro_readings = [gyro_readings[i] for i in order_imu]
+
+    estimator = ImuCameraSyncEstimator()
+    res = estimator.estimate_offset(
+        frames_rgb=cam_frames,
+        cam_timestamps_ns=cam_ts,
+        gyro_readings=gyro_readings,
+        imu_timestamps_ns=imu_ts,
+    )
+
+    table = Table(title="IMU-Camera Synchronization Estimation")
+    table.add_column("Parameter", style="cyan")
+    table.add_column("Value", style="bold green")
+    table.add_row("Estimated Hardware Offset", f"{res.offset_ms:+.3f} ms")
+    table.add_row("Cross-Correlation Peak (r)", f"{res.correlation_peak:.3f}")
+    table.add_row("SLA Verdict (limit < 5.0 ms)", "[bold green]PASS[/bold green]" if abs(res.offset_ms) <= 5.0 else "[bold red]FAIL[/bold red]")
+    table.add_row("Explanation", res.explanation)
+    console.print(table)
 
 
 @app.command()

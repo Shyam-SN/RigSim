@@ -10,6 +10,10 @@ from mcap.reader import make_reader
 from rich.console import Console
 from rich.table import Table
 
+from rigsim.calib.checker import (
+    check_c2_camera_bump,
+    check_c3_stereo_consistency,
+)
 from rigsim.config.qa import QAResult, QAThresholdsConfig, SessionVerdict
 from rigsim.config.session import Session
 from rigsim.config.types import QAVerdict, SensorKind
@@ -21,6 +25,12 @@ from rigsim.qa.image import (
     check_i5_corruption,
     check_i6_noise_level,
 )
+from rigsim.qa.imu import (
+    check_m1_imu_gravity,
+    check_m2_imu_static_bias,
+    check_m3_imu_bias_jump,
+    check_m4_imu_gravity_direction,
+)
 from rigsim.qa.timing import (
     check_t1_frame_drops,
     check_t2_effective_fps,
@@ -28,6 +38,7 @@ from rigsim.qa.timing import (
     check_t4_timestamp_sanity,
     check_t5_transport_latency,
     check_t6_inter_camera_sync,
+    check_t7_imu_cam_offset,
     check_t8_imu_continuity,
 )
 from rigsim.qa.verdict import VerdictEvaluator
@@ -64,6 +75,7 @@ class QAEngine:
         # 1. Ingest streams from MCAP
         camera_data: dict[str, dict[str, Any]] = {}
         imu_data: dict[str, dict[str, Any]] = {}
+        streams_by_id = {s.stream_id: s for s in session.streams}
 
         for stream in session.streams:
             if stream.kind in [SensorKind.RGB, SensorKind.STEREO_LEFT, SensorKind.STEREO_RIGHT]:
@@ -72,6 +84,8 @@ class QAEngine:
                     "device_times": [],
                     "host_times": [],
                     "frames": [],
+                    "intrinsics": stream.intrinsics,
+                    "distortion": stream.distortion,
                 }
             elif stream.kind == SensorKind.IMU:
                 imu_data[stream.stream_id] = {
@@ -79,6 +93,8 @@ class QAEngine:
                     "device_times": [],
                     "host_times": [],
                     "is_saturated": [],
+                    "accel": [],
+                    "gyro": [],
                 }
 
         # Read MCAP sequentially
@@ -114,6 +130,10 @@ class QAEngine:
                         imu_entry["host_times"].append(message.log_time)
                         payload = json.loads(message.data)
                         imu_entry["is_saturated"].append(payload.get("is_saturated", False))
+                        acc = payload.get("linear_acceleration", {"x": 0.0, "y": 0.0, "z": 9.81})
+                        gyr = payload.get("angular_velocity", {"x": 0.0, "y": 0.0, "z": 0.0})
+                        imu_entry["accel"].append([acc["x"], acc["y"], acc["z"]])
+                        imu_entry["gyro"].append([gyr["x"], gyr["y"], gyr["z"]])
 
         # Sort per-stream samples by device_time_ns to evaluate true sensor physics
         for stream_id, cam_entry in camera_data.items():
@@ -130,6 +150,8 @@ class QAEngine:
                 imu_entry["device_times"] = [imu_entry["device_times"][i] for i in order]
                 imu_entry["host_times"] = [imu_entry["host_times"][i] for i in order]
                 imu_entry["is_saturated"] = [imu_entry["is_saturated"][i] for i in order]
+                imu_entry["accel"] = [imu_entry["accel"][i] for i in order]
+                imu_entry["gyro"] = [imu_entry["gyro"][i] for i in order]
 
         # 2. Run QA Checks
         results: list[QAResult] = []
@@ -161,35 +183,121 @@ class QAEngine:
             results.append(check_i5_corruption(stream_id, frames, dev_times))
             results.append(check_i6_noise_level(stream_id, frames, dev_times))
 
-        # Inter-camera sync (T6)
-        # Check stereo pair if available
-        if "cam_stereo_left" in camera_data and "cam_stereo_right" in camera_data:
-            res_t6 = check_t6_inter_camera_sync(
-                "cam_stereo_left",
-                "cam_stereo_right",
-                camera_data["cam_stereo_left"]["device_times"],
-                camera_data["cam_stereo_right"]["device_times"],
-                self.thresholds.timing,
-            )
-            results.append(res_t6)
-        elif "cam0" in camera_data and "cam1" in camera_data:
-            res_t6 = check_t6_inter_camera_sync(
-                "cam0",
-                "cam1",
-                camera_data["cam0"]["device_times"],
-                camera_data["cam1"]["device_times"],
-                self.thresholds.timing,
-            )
-            results.append(res_t6)
+            # Geometric calibration check (C2: Camera bump via solvePnP)
+            if cdata.get("intrinsics") is not None and len(frames) >= 5:
+                intr = cdata["intrinsics"]
+                K = np.array([
+                    [intr.fx, 0, intr.cx],
+                    [0, intr.fy, intr.cy],
+                    [0, 0, 1.0],
+                ], dtype=np.float64)
+                dist_coeffs = (
+                    np.array(cdata["distortion"].coeffs, dtype=np.float64)
+                    if cdata.get("distortion")
+                    else np.zeros(5)
+                )
+                results.append(check_c2_camera_bump(stream_id, frames, dev_times, K, dist_coeffs, self.thresholds.calibration))
 
-        # IMU checks (T8)
+        # Inter-camera sync (T6) and Stereo Epipolar Consistency (C3)
+        stereo_left_id = None
+        stereo_right_id = None
+        if "cam_stereo_left" in camera_data and "cam_stereo_right" in camera_data:
+            stereo_left_id = "cam_stereo_left"
+            stereo_right_id = "cam_stereo_right"
+        elif "cam0" in camera_data and "cam1" in camera_data:
+            stereo_left_id = "cam0"
+            stereo_right_id = "cam1"
+
+        if stereo_left_id and stereo_right_id:
+            results.append(check_t6_inter_camera_sync(
+                stereo_left_id,
+                stereo_right_id,
+                camera_data[stereo_left_id]["device_times"],
+                camera_data[stereo_right_id]["device_times"],
+                self.thresholds.timing,
+            ))
+
+            # C3 Stereo Epipolar Consistency
+            c_l = camera_data[stereo_left_id]
+            c_r = camera_data[stereo_right_id]
+            if c_l.get("intrinsics") and c_r.get("intrinsics") and len(c_l["frames"]) > 0 and len(c_r["frames"]) > 0:
+                intr_l = c_l["intrinsics"]
+                intr_r = c_r["intrinsics"]
+                Kl = np.array([[intr_l.fx, 0, intr_l.cx], [0, intr_l.fy, intr_l.cy], [0, 0, 1.0]])
+                Kr = np.array([[intr_r.fx, 0, intr_r.cx], [0, intr_r.fy, intr_r.cy], [0, 0, 1.0]])
+
+                s_l = streams_by_id.get(stereo_left_id)
+                s_r = streams_by_id.get(stereo_right_id)
+                if s_l and s_r:
+                    T_l = s_l.extrinsics.as_numpy()
+                    T_r = s_r.extrinsics.as_numpy()
+                    T_rel = np.linalg.inv(T_r) @ T_l
+                    R_rel = T_rel[:3, :3]
+                    t_rel = T_rel[:3, 3]
+                    tx = np.array([
+                        [0, -t_rel[2], t_rel[1]],
+                        [t_rel[2], 0, -t_rel[0]],
+                        [-t_rel[1], t_rel[0], 0],
+                    ])
+                    E = tx @ R_rel
+                    F = np.linalg.inv(Kr).T @ E @ np.linalg.inv(Kl)
+                    results.append(check_c3_stereo_consistency(
+                        f"{stereo_left_id}<->{stereo_right_id}",
+                        c_l["frames"],
+                        c_r["frames"],
+                        c_l["device_times"],
+                        F,
+                        self.thresholds.calibration,
+                    ))
+
+        # IMU-Camera Temporal Sync Check (T7)
+        primary_cam_id = None
+        for cand in ["cam_wrist", "cam_stereo_left", "cam0"]:
+            if cand in camera_data and len(camera_data[cand]["frames"]) >= 10:
+                primary_cam_id = cand
+                break
+        if primary_cam_id is None and camera_data:
+            primary_cam_id = list(camera_data.keys())[0]
+
+        primary_imu_id = list(imu_data.keys())[0] if imu_data else None
+
+        if primary_cam_id and primary_imu_id:
+            cdata = camera_data[primary_cam_id]
+            idata = imu_data[primary_imu_id]
+            K = None
+            if cdata.get("intrinsics"):
+                intr = cdata["intrinsics"]
+                K = np.array([[intr.fx, 0, intr.cx], [0, intr.fy, intr.cy], [0, 0, 1.0]])
+            results.append(check_t7_imu_cam_offset(
+                camera_stream_id=primary_cam_id,
+                frames_rgb=cdata["frames"],
+                cam_timestamps_ns=cdata["device_times"],
+                imu_stream_id=primary_imu_id,
+                gyro_readings=idata["gyro"],
+                imu_timestamps_ns=idata["device_times"],
+                thresholds=self.thresholds.timing,
+                K=K,
+            ))
+
+        # IMU Physical & Calibration Checks (T8, M1, M2, M3, M4)
         for stream_id, idata in imu_data.items():
             dev_times = idata["device_times"]
             is_sat = idata["is_saturated"]
             rate = idata["nominal_rate_hz"]
+            accel = idata["accel"]
+            gyro = idata["gyro"]
+
             if dev_times:
                 all_timestamps.extend([dev_times[0], dev_times[-1]])
+
+            # T8 IMU Stream Continuity & Saturation
             results.append(check_t8_imu_continuity(stream_id, dev_times, is_sat, rate))
+
+            # M1-M4 Checks
+            results.append(check_m1_imu_gravity(stream_id, accel, gyro, dev_times, self.thresholds.imu))
+            results.append(check_m2_imu_static_bias(stream_id, accel, gyro, dev_times, self.thresholds.imu))
+            results.append(check_m3_imu_bias_jump(stream_id, accel, gyro, dev_times))
+            results.append(check_m4_imu_gravity_direction(stream_id, accel, gyro, dev_times))
 
         # 3. Overall Verdict
         t_start = min(all_timestamps) if all_timestamps else 0

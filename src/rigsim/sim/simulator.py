@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 import mujoco
+import numpy as np
 import yaml
+from scipy.spatial.transform import Rotation
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 
 from rigsim.clocks.model import ClockEngine, TransportDelayEngine
@@ -58,7 +60,7 @@ class SimulationEngine:
         # Initialize Clocks
         self.clocks: dict[str, ClockEngine] = {}
         for c in rig_config.clocks:
-            self.clocks[c.clock_id] = ClockEngine(c, seed=seed)
+            self.clocks[c.clock_id] = ClockEngine(c, seed=seed, t_zero_ns=self.epoch_base_ns)
         self.transport = TransportDelayEngine(seed=seed)
 
         # Initialize Trajectory Generator for mocap bodies
@@ -92,13 +94,20 @@ class SimulationEngine:
         # Initialize IMU simulator
         if rig_config.imu is not None:
             self.imu_sim: IMUSimulator | None = IMUSimulator(rig_config.imu, seed=seed)
-            self.imu_accel_id = mujoco.mj_name2id(
+            accel_id = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_accel"
             )
-            self.imu_gyro_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_gyro")
-            self.imu_quat_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_quat")
+            gyro_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_gyro")
+            quat_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_quat")
+
+            self.imu_accel_adr = self.model.sensor_adr[accel_id] if accel_id >= 0 else -1
+            self.imu_gyro_adr = self.model.sensor_adr[gyro_id] if gyro_id >= 0 else -1
+            self.imu_quat_adr = self.model.sensor_adr[quat_id] if quat_id >= 0 else -1
         else:
             self.imu_sim = None
+            self.imu_accel_adr = -1
+            self.imu_gyro_adr = -1
+            self.imu_quat_adr = -1
 
         # Initialize Camera simulators
         self.cameras: dict[str, CameraSimulator] = {}
@@ -168,6 +177,7 @@ class SimulationEngine:
                 t_sim_ns = self.epoch_base_ns + int(round(t_sim_s * 1_000_000_000))
 
                 # 1. Update kinematic mocap pose from trajectory generator
+                pose = None
                 if self.mocap_body_id >= 0:
                     pose = self.trajectory.get_pose(t_sim_s)
                     self.data.mocap_pos[self.mocap_body_id] = pose.position
@@ -192,11 +202,27 @@ class SimulationEngine:
                         host_t = self.transport.compute_host_time_ns(dev_t)
                         host_t = self.fault_engine.modify_host_time(imu_stream_id, host_t, dev_t)
 
-                        accel = self.data.sensordata[
-                            self.imu_accel_id : self.imu_accel_id + 3
-                        ].copy()
-                        gyro = self.data.sensordata[self.imu_gyro_id : self.imu_gyro_id + 3].copy()
-                        quat = self.data.sensordata[self.imu_quat_id : self.imu_quat_id + 4].copy()
+                        if self.mocap_body_id >= 0 and pose is not None:
+                            gyro = pose.angular_velocity.copy()
+                            q_wxyz = pose.quaternion_wxyz
+                            rot = Rotation.from_quat([q_wxyz[1], q_wxyz[2], q_wxyz[3], q_wxyz[0]])
+                            lin_acc = (
+                                pose.linear_acceleration
+                                if pose.linear_acceleration is not None
+                                else np.zeros(3)
+                            )
+                            accel = rot.inv().apply(lin_acc + np.array([0.0, 0.0, 9.81]))
+                            quat = pose.quaternion_wxyz.copy()
+                        else:
+                            accel = self.data.sensordata[
+                                self.imu_accel_adr : self.imu_accel_adr + 3
+                            ].copy()
+                            gyro = self.data.sensordata[
+                                self.imu_gyro_adr : self.imu_gyro_adr + 3
+                            ].copy()
+                            quat = self.data.sensordata[
+                                self.imu_quat_adr : self.imu_quat_adr + 4
+                            ].copy()
 
                         imu_sample = self.imu_sim.update_and_sample(
                             true_accel=accel,

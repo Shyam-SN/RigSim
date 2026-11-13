@@ -100,3 +100,4 @@ class VerdictEvaluator:
             usable.append(TimeWindow(t_start_ns=curr, t_end_ns=t_end_ns))
 
         return usable
+

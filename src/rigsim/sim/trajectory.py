@@ -14,6 +14,7 @@ class PoseTrajectorySample:
     quaternion_wxyz: np.ndarray  # MuJoCo format: [w, x, y, z]
     linear_velocity: np.ndarray  # [vx, vy, vz] in m/s
     angular_velocity: np.ndarray  # [wx, wy, wz] in rad/s
+    linear_acceleration: np.ndarray = None  # [ax, ay, az] in m/s^2
 
 
 class TrajectoryGenerator:
@@ -77,9 +78,10 @@ class TrajectoryGenerator:
         anchor_positions = np.array(anchor_pos_list)
         pos_spline = CubicSpline(anchor_times, anchor_positions, bc_type="clamped")
 
-        # Evaluate positions and linear velocities (analytic derivative)
+        # Evaluate positions, linear velocities and accelerations (analytic derivatives)
         self.positions = pos_spline(self.times)
         self.linear_velocities = pos_spline(self.times, 1)
+        self.linear_accelerations = pos_spline(self.times, 2)
 
         # 2. Orientation & Angular Velocities with Excitation Segments
         # Excitation window: inject 3-axis rich sinusoidal rotations (omega up to 2 rad/s)
@@ -135,4 +137,5 @@ class TrajectoryGenerator:
             quaternion_wxyz=self.quats_wxyz[idx].copy(),
             linear_velocity=self.linear_velocities[idx].copy(),
             angular_velocity=self.angular_velocities[idx].copy(),
+            linear_acceleration=self.linear_accelerations[idx].copy(),
         )

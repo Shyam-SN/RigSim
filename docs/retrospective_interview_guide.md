@@ -270,3 +270,91 @@ This document serves as a living engineering journal and technical interview pre
 > 1. Global Mean Luminance: To detect overall underexposure ($< 20$) or washed out overexposure ($> 235$).  
 > 2. Pixel Clipping Ratios at 0 and 255: Checking the fraction of pixels stuck at sensor rail limits ($C_{0} + C_{255}$).  
 > 3. Target-Aware Thresholding: Recognizing that calibration rigs with high-contrast ChArUco fiducials naturally contain ~10–12% pure black and white pixels by design, so clipping limits must be parameterized based on the active capture protocol."*
+
+---
+
+## Milestone M4: Sensor Sync, IMU-Camera Temporal Calibration & Fiducial Geometry
+
+### 1. Technical Context & Strategic Design Decisions
+
+#### A. IMU-Camera Temporal Calibration via Optical Flow Cross-Correlation (T7)
+- **The Problem:** In Visual-Inertial Odometry (VIO) and SLAM (VINS, OKVIS, ORB-SLAM3), camera images and IMU measurements must be temporally aligned with sub-millisecond precision. If an IMU lags a camera by just $15\text{ ms}$ during a robot arm rotation of $100^\circ/\text{s}$, the angular velocity measurements will be offset by $1.5^\circ$, introducing divergence into EKF/factor graph state estimation.
+- **The Solution:** We implement an extrinsic-free temporal synchronization pipeline:
+  1. **Visual Angular Velocity Estimation:** Track Shi-Tomasi corner features across consecutive camera frames using Lucas-Kanade optical flow (`cv2.calcOpticalFlowPyrLK`). Compute the inter-frame 2D homography $\mathbf{H}$ using RANSAC.
+  2. **Polar SVD Decomposition for Rotation Extraction:** Normalize homography by camera intrinsics $\mathbf{H}_{\text{norm}} = \mathbf{K}^{-1} \mathbf{H} \mathbf{K}$ and compute its Singular Value Decomposition $\mathbf{H}_{\text{norm}} = \mathbf{U} \mathbf{\Sigma} \mathbf{V}^T$. The closest orthonormal rotation matrix in $SO(3)$ is given by $\mathbf{R} = \mathbf{U} \mathbf{V}^T$ (ensuring $\det(\mathbf{R}) = +1$). The visual angular speed is $\omega_{\text{vis}} = \arccos((\text{Tr}(\mathbf{R})-1)/2) / \Delta t$.
+  3. **Gyroscope Angular Velocity Norm:** Compute $\|\boldsymbol{\omega}\|_{\text{gyro}} = \sqrt{\omega_x^2 + \omega_y^2 + \omega_z^2}$ from the 200 Hz IMU stream.
+  4. **Uniform Interpolation & Cross-Correlation:** Resample both signals onto a uniform 1 kHz grid ($dt = 1\text{ ms}$) over their common time window, subtract means, and compute normalized cross-correlation:
+     $$r(\tau) = \frac{1}{N} \sum_t \frac{\omega_{\text{vis}}(t) - \bar{\omega}_{\text{vis}}}{\sigma_{\text{vis}}} \cdot \frac{\|\boldsymbol{\omega}\|_{\text{gyro}}(t - \tau) - \bar{\omega}_{\text{gyro}}}{\sigma_{\text{gyro}}}$$
+  5. **MAP Peak Disambiguation & Sub-Frame Parabolic Interpolation:** Apply a maximum a posteriori prior near zero lag to avoid periodic waveform aliasing, followed by 3-point parabolic refinement:
+     $$\Delta \tau = \frac{y_{-1} - y_{+1}}{2(y_{-1} - 2y_0 + y_{+1})} \cdot dt$$
+
+#### B. Modern OpenCV 5.0 ChArUco Calibration Pipeline
+- **The Context:** OpenCV 5.0 completely removed legacy monolithic calibration helpers (`cv2.aruco.calibrateCameraCharuco` and `Dictionary_get`).
+- **The Architecture:**
+  1. Instantiated `cv2.aruco.CharucoDetector(board)`.
+  2. Detected board corners: `corners, ids, marker_corners, marker_ids = detector.detectBoard(gray)`.
+  3. Mapped image corners to planar 3D coordinates: `obj_points, img_points = board.matchImagePoints(corners, ids)`.
+  4. Executed monocular calibration with `cv2.calibrateCamera()` and stereo calibration with `cv2.stereoCalibrate()`, enforcing `np.ascontiguousarray(..., dtype=np.float32)` for C++ memory safety.
+
+#### C. IMU Physical & Calibration Integrity (M1–M4)
+- **M1 Static Gravity Norm:** Identifies static windows ($\|\boldsymbol{\omega}\| < 0.05\text{ rad/s}$) and verifies that measured acceleration norm matches standard gravity ($\|\|\mathbf{a}\| - 9.80665\| \le 0.20\text{ m/s}^2$).
+- **M2 Zero-Rate Drift (Static Bias):** Verifies that stationary gyroscope bias is $< 0.01\text{ rad/s}$ ($0.57^\circ/\text{s}$) and stationary accelerometer bias is $< 0.10\text{ m/s}^2$.
+- **M3 Bias Jumps (Discontinuities):** Evaluates moving median filters to detect abrupt thermal or mechanical sensor shock step discontinuities ($> 0.02\text{ rad/s}$ or $> 0.2\text{ m/s}^2$).
+- **M4 Gravity Mounting Vector (Axis-Flip Detection):** Checks that the mean static acceleration vector aligns with the nominal mounting configuration (e.g. $[0, 0, 1]$ for upright IMU) to within $25.0^\circ$, immediately catching inverted sensor cabling or misconfigured transforms.
+
+---
+
+### 2. Mistakes Encountered, Diagnosis & Fixes
+
+#### Mistake 15: The 54-Year Crystal Oscillator Drift Bug
+- **What Happened:** During QA timing checks, every clean simulated camera stream reported an astronomical clock offset of 49.2 seconds relative to the IMU, failing all synchronization checks.
+- **How It Was Found:** Printing `cam_timestamps[0] - imu_timestamps[0]` revealed a $-49,219,392,000\text{ ns}$ initial offset.
+- **Root Cause:** Crystal oscillator drift is parameterized in parts-per-million (e.g. $20\text{ ppm} = 20 \mu\text{s}/\text{s}$). The initial drift formula evaluated drift over absolute nanoseconds since the UNIX epoch:
+  $$\Delta t_{\text{drift}} = \text{drift\_ppm} \times 10^{-6} \times t_{\text{sim\_ns}}$$
+  With $t_{\text{sim\_ns}} \approx 1.7 \times 10^{18}\text{ ns}$ (54 years), multiplying $20\text{ ppm} \times 54\text{ years}$ accumulated ~49 seconds of synthetic clock drift before the session even started!
+- **How It Was Fixed:** Anchored drift accumulation to elapsed session time:
+  $$\Delta t_{\text{drift}} = \text{drift\_ppm} \times 10^{-6} \times (t_{\text{sim\_ns}} - t_{\text{zero\_ns}})$$
+
+#### Mistake 16: ArUco Dictionary Namespace Collision in Multi-Camera Labs
+- **What Happened:** `CharucoCalibrator.detect_board()` detected 0 corners on wide surveillance camera views despite the ChArUco board sitting prominently on the table.
+- **How It Was Found:** Cropping directly around the board allowed detection to succeed, but full image views failed completely.
+- **Root Cause:** In Milestone M3, we added textured indoor walls (`room_texture.png`) with ArUco markers to prevent infinite void clipping. However, `room_texture.png` was generated using `DICT_5X5_250` with marker IDs 10–13. The ChArUco board target on the table ALSO used `DICT_5X5_250` with IDs 10–13! When OpenCV detected two completely different markers with the exact same ID in the same camera frame, the board topology solver rejected the entire board.
+- **How It Was Fixed:** Regenerated `assets/mjcf/room_texture.png` using an isolated dictionary family (`cv2.aruco.DICT_6X6_250`). In real multi-camera robotics labs, localization fiducials and calibration boards must always occupy disjoint dictionary namespaces.
+
+#### Mistake 17: MuJoCo `sensordata` Array Offset vs Sensor ID Indexing
+- **What Happened:** IMU gyroscope readings reported angular rates of $9.81\text{ rad/s}$ while stationary on the table, and cross-correlation returned near-zero correlation with visual motion.
+- **How It Was Found:** Inspecting the raw IMU messages in MCAP revealed `angular_velocity.y = 9.8075 rad/s` and `linear_acceleration.z = 9.71 m/s²`.
+- **Root Cause:** In MuJoCo, `mj_name2id(m, mjOBJ_SENSOR, "imu_gyro")` returns the sensor index (`1`), NOT the offset into `data.sensordata`. Because accelerometer (sensor 0) has 3 dimensions, sensor 1 starts at index 3. Slicing with `data.sensordata[imu_gyro_id : imu_gyro_id + 3]` read indices 1, 2, 3: index 2 was the accelerometer's Z-axis gravity ($9.81\text{ m/s}^2$), which was copied directly into gyro Y!
+- **How It Was Fixed:** Read `model.sensor_adr[sensor_id]` and indexed `data.sensordata[sensor_adr : sensor_adr + 3]`.
+
+#### Mistake 18: Zero Dynamic Degrees-of-Freedom on Kinematic Mocap Bodies
+- **What Happened:** Even after fixing `sensor_adr`, the IMU gyroscope reported `[0, 0, 0]` while moving along the trajectory.
+- **How It Was Found:** Step-debugging MuJoCo showed that `data.sensordata` for gyro on `wrist_body` remained identically zero during motion.
+- **Root Cause:** MuJoCo mocap bodies (`mocap="true"`) have no dynamic degrees of freedom in `model.nv` (`qvel` and `qacc` are always zero). MuJoCo sensors compute spatial velocity from `qvel`. Because mocap positions are kinematically overridden each step, MuJoCo's physics solver does not calculate inertial velocities for them.
+- **How It Was Fixed:** In `SimulationEngine`, when an IMU is mounted on a mocap body, we extract the true kinematic state from the analytic C2 spline `TrajectoryGenerator`:
+  - $\boldsymbol{\omega}_{\text{true}} = \text{pose.angular\_velocity}$
+  - $\mathbf{a}_{\text{specific}} = \mathbf{R}^T (\mathbf{a}_{\text{world}} - [0, 0, -9.81])$
+
+#### Mistake 19: Planar Degeneracy of Essential Matrix in Visual-Inertial Sync
+- **What Happened:** `check_t7_imu_cam_offset` failed with 211 rad/s visual angular velocity and $-100\text{ ms}$ lag.
+- **How It Was Found:** Examining `cv2.findEssentialMat` + `cv2.recoverPose` showed that when the camera looked at the planar tabletop, the 5-point algorithm suffered from the classic planar homography degeneracy, returning unstable $180^\circ$ flipped rotations.
+- **How It Was Fixed:** Replaced Essential matrix pose recovery with planar Homography (`cv2.findHomography(p0, p1, cv2.RANSAC, 2.0)`) combined with SVD Polar Decomposition ($\mathbf{H}_{\text{norm}} = \mathbf{U} \mathbf{\Sigma} \mathbf{V}^T \implies \mathbf{R} = \mathbf{U} \mathbf{V}^T$). This accurately recovered rotational motion ($r = 0.785$ correlation with IMU gyroscope, offset $-0.37\text{ ms}$).
+
+---
+
+### 3. Interview Cheat Sheet & Talking Points
+
+#### Question: *"How do you calibrate the time offset between an IMU and a camera without external hardware trigger cables?"*
+> **Candidate Answer:**
+> *"We exploit the physical coupling between camera optical flow and gyroscope angular rate.  
+> When a rigid rig rotates, the camera's feature points shift across the image plane with an instantaneous visual angular velocity $\boldsymbol{\omega}_{\text{vis}}$ that is identical to the gyroscope's measured angular rate $\boldsymbol{\omega}_{\text{gyro}}$ up to sensor noise.  
+> We track sparse Shi-Tomasi corners via Lucas-Kanade optical flow, fit the inter-frame homography, and extract rotation via polar SVD decomposition. Resampling both the visual angular rate norm and gyroscope norm to 1 kHz allows us to cross-correlate the signals over a $\pm 100\text{ ms}$ search window. Using parabolic interpolation around the correlation peak resolves the hardware clock offset with sub-millisecond precision.  
+> In production, this automated check runs on every collection run to catch USB buffer delays or crystal thermal drifts before data enters the training pipeline."*
+
+#### Question: *"What are the failure modes of Essential Matrix estimation in multi-camera rigs, and how do you handle them?"*
+> **Candidate Answer:**
+> *"The Essential matrix $\mathbf{E} = [\mathbf{t}]_\times \mathbf{R}$ relies on epipolar geometry between two views of a non-planar 3D scene with non-zero baseline.  
+> It suffers from two major failure modes:  
+> 1. Planar Scene Degeneracy: When all tracked feature points lie on a single 3D plane (such as a tabletop or flat warehouse floor), the epipolar constraint degenerates into an infinite family of homographies, causing `cv2.findEssentialMat` to produce arbitrary two-fold ambiguities or spurious $180^\circ$ rotations.  
+> 2. Zero-Translation Degeneracy: When the camera undergoes pure rotation without translation ($\mathbf{t} \to 0$), the Essential matrix collapses ($\mathbf{E} \to 0$) and epipolar geometry is undefined.  
+> To make QA checks robust across all environments, we detect whether motion is planar/rotational and switch to Homography estimation with polar SVD decomposition. This guarantees stable rotation extraction even in tabletop manipulation cells."*

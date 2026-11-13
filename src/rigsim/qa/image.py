@@ -256,9 +256,9 @@ def check_i5_corruption(
             flagged_windows.append({"t_start_ns": timestamps_ns[idx], "t_end_ns": timestamps_ns[idx]})
             continue
 
-        # Horizontal transmission stripe detection:
-        # A dropped network packet or macroblock row fills scanlines with solid color or repeat values.
-        # This causes both an abrupt step in row mean AND low intra-row standard deviation across columns.
+        # Horizontal transmission stripe / packet drop detection:
+        # A dropped network packet or macroblock row fills scanlines with solid color.
+        # This causes both an abrupt step in row mean AND near-zero intra-row standard deviation across adjacent stripe scanlines.
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY) if img.ndim == 3 else img
         row_means = np.mean(gray, axis=1)
         row_stds = np.std(gray, axis=1)
@@ -266,9 +266,10 @@ def check_i5_corruption(
 
         stripe_detected = False
         for r in range(len(row_diffs)):
-            if row_diffs[r] > 40.0:
-                # Check if the adjacent rows exhibit uniform solid-fill characteristic of packet drops
-                if row_stds[r] < 12.0 or (r + 1 < len(row_stds) and row_stds[r + 1] < 12.0):
+            if row_diffs[r] > 35.0:
+                if (row_stds[r] < 1.5 and r > 0 and row_stds[r - 1] < 1.5) or (
+                    r + 2 < len(row_stds) and row_stds[r + 1] < 1.5 and row_stds[r + 2] < 1.5
+                ):
                     stripe_detected = True
                     break
 

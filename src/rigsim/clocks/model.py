@@ -8,22 +8,27 @@ from rigsim.config.clock import ClockModel, TransportLatencyModel
 class ClockEngine:
     """Simulates realistic crystal oscillator behavior.
 
-    t_device = (1 + drift_ppm * 1e-6) * t_sim + offset_ns + N(0, jitter_std_ns) + step_offset
+    t_device = t_sim + (drift_ppm * 1e-6) * (t_sim - t_zero) + offset_ns + N(0, jitter_std_ns) + step_offset
     """
 
-    def __init__(self, model: ClockModel, seed: int = 42):
+    def __init__(self, model: ClockModel, seed: int = 42, t_zero_ns: int | None = None):
         self.clock_id = model.clock_id
         self.offset_ns = model.offset_ns
         self.drift_ppm = model.drift_ppm
         self.jitter_std_ns = model.jitter_std_ns
         self.step_events = sorted(model.step_events, key=lambda e: e.t_sim_ns)
         self.rng = np.random.default_rng(seed)
+        self._t_zero_ns = t_zero_ns
 
     def sim_to_device_time_ns(self, t_sim_ns: int) -> int:
         """Convert simulation ground-truth time (ns) to sensor device clock time (ns)."""
-        # Linear frequency drift
-        drift_factor = 1.0 + (self.drift_ppm * 1e-6)
-        base_t = drift_factor * t_sim_ns + self.offset_ns
+        # Frequency drift accumulates over elapsed session operation time
+        if self._t_zero_ns is None:
+            self._t_zero_ns = t_sim_ns
+
+        elapsed_ns = t_sim_ns - self._t_zero_ns
+        drift_delta_ns = (self.drift_ppm * 1e-6) * elapsed_ns
+        base_t = t_sim_ns + drift_delta_ns + self.offset_ns
 
         # Add step discontinuities if any step event has occurred
         step_delta = 0
