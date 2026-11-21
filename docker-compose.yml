@@ -1,0 +1,11 @@
+services:
+  rigsim-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      bash -c "rigsim simulate --rig configs/rigs/tabletop_6cam.yaml --faults configs/faults/realistic_mixed.yaml --duration 2 --seed 42 --output-dir /app/data/demo_docker &&
+               rigsim qa /app/data/demo_docker/session.json &&
+               rigsim report /app/data/demo_docker/session.json"
+    volumes:
+      - ./data:/app/data
