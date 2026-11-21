@@ -2,24 +2,22 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, cleanup/job-ready ]
   pull_request:
     branches: [ main ]
 
 jobs:
   test:
-    name: Test on ${{ matrix.os }}
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ ubuntu-latest ]
+        python-version: [ "3.11", "3.12" ]
         include:
           - os: macos-14
             python-version: "3.11"
-            mujoco_gl: ""
-          - os: ubuntu-latest
-            python-version: "3.11"
-            mujoco_gl: "egl"
 
     steps:
       - name: Checkout repository
@@ -44,23 +42,28 @@ jobs:
 
       - name: Set up Python ${{ matrix.python-version }}
         run: |
-          uv venv --python ${{ matrix.python-version }}
-
-      - name: Install package with dev dependencies
-        run: |
-          uv pip install -e ".[dev]"
+          uv python install ${{ matrix.python-version }}
+          uv sync --all-extras --python ${{ matrix.python-version }}
 
       - name: Lint with Ruff
         run: |
-          .venv/bin/python -m ruff check src tests
+          uv run ruff check src tests
 
       - name: Type check with mypy
         run: |
-          .venv/bin/python -m mypy src
+          uv run mypy src
 
-      - name: Run unit tests
-        env:
-          MUJOCO_GL: ${{ matrix.mujoco_gl }}
+      - name: Run unit test suite with coverage
         run: |
-          .venv/bin/python -m pytest tests/ -v --cov=src/rigsim --cov-report=term-missing
+          uv run pytest tests/ -v --cov=src/rigsim --cov-report=term-missing
 
+  docker-build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t rigsim:latest .
